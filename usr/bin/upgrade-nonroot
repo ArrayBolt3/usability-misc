@@ -5,6 +5,11 @@
 
 set -e
 
+apt_update_msg='Updating apt packages...'
+flatpak_update_msg='Updating flatpak packages.
+This may take a while, even if flatpak reports "Nothing to do."'
+update_command_failed='false'
+
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/package_installed_check.bsh
 source /usr/libexec/helper-scripts/package_installed_check.bsh
 
@@ -12,10 +17,10 @@ if [ "$(id -un)" = 'root' ]; then
   ## Avoid using 'sudo' if already using account 'root'. Reasons:
   ## - Using 'sudo' is unnecessary in this case.
   ## - Would work in case of a user-sysmaint-split or sudo bug.
-  exec /usr/bin/apt-get-update-plus dist-upgrade
-fi
-
-## This is never reached if using 'exec' above.
+  printf '%s\n' "${apt_update_msg}"
+  /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
+  printf '%s\n' "${flatpak_update_msg}"
+  /usr/bin/flatpak -v update || update_command_failed='true'
 
 ## Check if 'sudo' is executable and use it, if so, irrespective of package
 ## 'user-sysmaint-split' installation status. This could be the case if one
@@ -26,13 +31,13 @@ fi
 ## note:
 ## zsh: exits non-zero if found but not exectuable.
 ## bash: exits 0 if found but not executable
-if test -x /usr/bin/sudo ; then
-  exec /usr/bin/sudo /usr/bin/apt-get-update-plus dist-upgrade
-fi
+elif test -x /usr/bin/sudo ; then
+  printf '%s\n' "${apt_update_msg}"
+  /usr/bin/sudo /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
+  printf '%s\n' "${flatpak_update_msg}"
+  /usr/bin/sudo /usr/bin/flatpak -v update || update_command_failed='true'
 
-## This is never reached if using 'exec' above.
-
-if pkg_installed user-sysmaint-split; then
+elif pkg_installed user-sysmaint-split; then
   ## Example use cases for using account 'root' with user-sysmaint-split installed:
   ## - root login
   ## - Qubes root console.
@@ -42,6 +47,18 @@ if pkg_installed user-sysmaint-split; then
     1>&2 echo "https://www.kicksecure.com/wiki/Sysmaint"
     exit 1
   fi
+  printf '%s\n' "${apt_update_msg}"
+  sudo /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
+  printf '%s\n' "${flatpak_update_msg}"
+  sudo /usr/bin/flatpak -v update || update_command_failed='true'
+
+else
+  printf '%s\n' "${apt_update_msg}"
+  sudo /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
+  printf '%s\n' "${flatpak_update_msg}"
+  sudo /usr/bin/flatpak -v update || update_command_failed='true'
 fi
 
-exec sudo /usr/bin/apt-get-update-plus dist-upgrade
+if [ "${update_command_failed}" = 'true' ]; then
+  exit 1
+fi
