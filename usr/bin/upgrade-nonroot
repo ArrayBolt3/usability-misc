@@ -13,6 +13,18 @@ update_command_failed='false'
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/package_installed_check.bsh
 source /usr/libexec/helper-scripts/package_installed_check.bsh
 
+flatpak_update_maybe() {
+  sudo_cmd="${1:-}"
+
+  if [ -n "$(flatpak list)" ]; then
+    if [ -n "${sudo_cmd}" ]; then
+      "${sudo_cmd}" /usr/bin/flatpak -v update
+    else
+      /usr/bin/flatpak -v update
+    fi
+  fi
+}
+
 if [ "$(id -un)" = 'root' ]; then
   ## Avoid using 'sudo' if already using account 'root'. Reasons:
   ## - Using 'sudo' is unnecessary in this case.
@@ -20,7 +32,7 @@ if [ "$(id -un)" = 'root' ]; then
   printf '%s\n' "${apt_update_msg}"
   /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
   printf '%s\n' "${flatpak_update_msg}"
-  /usr/bin/flatpak -v update || update_command_failed='true'
+  flatpak_update_maybe || update_command_failed='true'
 
 ## Check if 'sudo' is executable and use it, if so, irrespective of package
 ## 'user-sysmaint-split' installation status. This could be the case if one
@@ -35,7 +47,7 @@ elif test -x /usr/bin/sudo ; then
   printf '%s\n' "${apt_update_msg}"
   /usr/bin/sudo /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
   printf '%s\n' "${flatpak_update_msg}"
-  /usr/bin/sudo /usr/bin/flatpak -v update || update_command_failed='true'
+  flatpak_update_maybe /usr/bin/sudo || update_command_failed='true'
 
 elif pkg_installed user-sysmaint-split; then
   ## Example use cases for using account 'root' with user-sysmaint-split installed:
@@ -50,13 +62,13 @@ elif pkg_installed user-sysmaint-split; then
   printf '%s\n' "${apt_update_msg}"
   sudo /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
   printf '%s\n' "${flatpak_update_msg}"
-  sudo /usr/bin/flatpak -v update || update_command_failed='true'
+  flatpak_update_maybe sudo || update_command_failed='true'
 
 else
   printf '%s\n' "${apt_update_msg}"
   sudo /usr/bin/apt-get-update-plus dist-upgrade || update_command_failed='true'
   printf '%s\n' "${flatpak_update_msg}"
-  sudo /usr/bin/flatpak -v update || update_command_failed='true'
+  flatpak_update_maybe sudo || update_command_failed='true'
 fi
 
 if [ "${update_command_failed}" = 'true' ]; then
