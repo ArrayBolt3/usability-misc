@@ -6,7 +6,7 @@
 ## AI-Assisted
 
 ## style-ok: no-has -- runs in bare distro CI containers, before helper-scripts
-## (the source of 'has') is installed; 'command -v' is the correct idiom here.
+## is installed.
 
 ## CI debugging: dump OS, kernel, PATH, locale and apt/dnf repository
 ## configuration so a failing installer run can be diagnosed from the log.

@@ -6,7 +6,7 @@
 ## AI-Assisted
 
 ## style-ok: no-has -- runs in bare distro CI containers, before helper-scripts
-## (the source of 'has') is installed; 'command -v' is the correct idiom here.
+## is installed.
 
 ## CI setup: bring tor up. On apt-based images 'service' works; dnf-based
 ## images have no working init in the container, so the systemd/systemctl
