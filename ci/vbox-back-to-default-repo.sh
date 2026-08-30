@@ -24,13 +24,15 @@ run_installer() {
       --non-interactive --log-level=debug --no-boot --dev --ci --virtualbox-only
 }
 
-run_installer || {
+ec=0
+run_installer || ec="$?"
+if [ "${ec}" != '0' ]; then
    ec="$?"
-   if grep --ignore-case --quiet --regexp "debian" --regexp "buntu" --regexp "mint" /etc/os-release && test "${ec}" = "108"; then
+   if grep --ignore-case --regexp "debian" --regexp "buntu" --regexp "mint" /etc/os-release >/dev/null 2>&1 && [ "${ec}" = "108" ]; then
       printf '%s\n' "Expected error as --oracle-repo is not specified"
       apt-get remove -y 'virtualbox*'
       run_installer
    else
       exit "${ec}"
    fi
-}
+fi
