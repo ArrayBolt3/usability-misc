@@ -1,3 +1,29 @@
+commit b041df1bd4fa6c117011b898d401229010d5ef60
+Merge: ba94ab7 146cb99
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Aug 30 10:25:29 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit 146cb99ef2a8d12681ea05fba7b2d5f3ac1b29f1
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Wed Aug 26 01:27:59 2026 -0400
+
+    Polish AI-generated changes
+
+commit 5629ec704ccdeb6ed5fd4e7f264706f2028807ef
+Merge: 461aa8d 50a2c7e
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Wed Aug 26 00:50:54 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit ba94ab7d24e981bf0f5be5068a78528d402308c7
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Aug 23 05:50:31 2026 +0000
+
+    bumped changelog version
+
 commit 7712435714f8a4d67196549cb1297fa3bf8363fa
 Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Sun Aug 23 01:43:04 2026 -0400
@@ -9,6 +35,17 @@ Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Fri Aug 21 09:05:09 2026 +0000
 
     bumped changelog version
+
+commit 50a2c7e4ff750b9c44e576938f2d8af85124c876
+Author: claude (dev272 e8b76afb-795c-4739-8ebd-023de854021e) <noreply@anthropic.com>
+Date:   Fri Aug 21 04:20:23 2026 -0400
+
+    usability-misc: source helper-scripts via HELPER_SCRIPTS_PATH, drop SC1091 disable
+
+    - has-pci-usb-controller: use source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/has.sh;
+      drop the dead '# shellcheck disable=SC1091' and the stale sibling note.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 
 commit da28b95b759e4d3b78275ea45f62787dada77ff2
 Merge: 2aa621a babfdd4
