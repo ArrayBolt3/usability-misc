@@ -84,19 +84,16 @@ jobs:
 
             - name: Run VirtualBox Installer - Oracle repository - Clearnet
               run: |
-                  if ! grep --ignore-case --quiet "kali" /etc/os-release; then
+                  if ! grep --ignore-case "kali" /etc/os-release >/dev/null 2>&1; then
                     sudo -u user -- usr/share/usability-misc/dist-installer-cli-standalone --non-interactive --log-level=debug --no-boot --dev --ci --virtualbox-only --oracle-repo
                   fi
             - name: Run VirtualBox Installer - Oracle repository - Onion
               run: |
-                  if ! grep --ignore-case --quiet "kali" /etc/os-release; then
+                  if ! grep --ignore-case "kali" /etc/os-release >/dev/null 2>&1; then
                     sudo -u user -- usr/share/usability-misc/dist-installer-cli-standalone --non-interactive --log-level=debug --no-boot --dev --ci --virtualbox-only --oracle-repo --onion
                   fi
 
             - name: Run VirtualBox Installer - back to default repository
-              ## Extracted to a real script so it can be linted and regression-
-              ## tested (dist-ai: dist-installer-cli-tests) instead of living as
-              ## un-testable YAML-embedded bash. Single source of truth.
               run: ./ci/vbox-back-to-default-repo.sh
             - name: Run VirtualBox Installer - back to default repository - Clearnet
               run: sudo -u user -- usr/share/usability-misc/dist-installer-cli-standalone --non-interactive --log-level=debug --no-boot --dev --ci --virtualbox-only --onion
