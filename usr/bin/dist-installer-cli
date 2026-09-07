@@ -101,8 +101,8 @@ if was_executed "${BASH_SOURCE[0]}"; then
   SKIP_UNIT_TESTS=true
 fi
 
-# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.sh
-source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/has.sh
+# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
+source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/has.bsh
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/wc-test.sh
 source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/wc-test.sh

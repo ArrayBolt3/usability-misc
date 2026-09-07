@@ -153,8 +153,8 @@ if was_executed "${BASH_SOURCE[0]}"; then
   SKIP_UNIT_TESTS=true
 fi
 
-# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.sh
-##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.sh
+# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
+##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
 #!/bin/bash
 
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
@@ -221,7 +221,7 @@ modprobe_remove() {
   modprobe --remove "${1}" || return 1
   return 0
 }
-##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.sh
+##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/wc-test.sh
 ##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/wc-test.sh
@@ -1384,8 +1384,8 @@ output_cmd_set() {
    fi
 }
 ##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/xtrace.bsh
-# shellcheck source=./has.sh
-##### SKIP duplicate source import from file /usr/libexec/helper-scripts/has.sh
+# shellcheck source=./has.bsh
+##### SKIP duplicate source import from file /usr/libexec/helper-scripts/has.bsh
 # shellcheck source=./trace.bsh
 ##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/trace.bsh
 #!/bin/bash
@@ -2026,7 +2026,7 @@ is_addr_port(){
 
 ## TODO: how to handle installer specific code?
 
-##### SKIP duplicate source import from file /usr/libexec/helper-scripts/has.sh
+##### SKIP duplicate source import from file /usr/libexec/helper-scripts/has.bsh
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/log_run_die.sh
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/ip_syntax.sh
 
