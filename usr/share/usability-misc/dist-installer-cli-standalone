@@ -18,7 +18,7 @@
 declare version me start_time dialog_title license adrelanos_signify \
   hulahoop_signify oracle_pgp user_home_dir directory_prefix guest \
   hypervisor interface oracle_repo log_level guest_version socks_proxy onion \
-  non_interactive dev noupdate noupgrade dry_run getversion getopt ci no_import \
+  non_interactive dev noupdate noupgrade dry_run_skip_commands getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
   url_version_domain run_background background_pid  \
@@ -1727,8 +1727,9 @@ log_run() {
   printf -v command_without_extraneous_spaces_temp '%q ' "${@}"
   command_without_extraneous_spaces="$(printf "%s\n" "${command_without_extraneous_spaces_temp}")"
 
-  ## TODO: rename variable to 'dry_run_skip_commands'. Potential footgun if used from other scripts.
-  if test "${dry_run:-}" = "1"; then
+  ## Skip the command (dry-run) only for callers that opt in via this specific
+  ## variable name, so an unrelated per-script 'dry_run' cannot trigger it.
+  if test "${dry_run_skip_commands:-}" = "1"; then
     log "${level}" "Skipping command (dry-run): $ ${command_without_extraneous_spaces}"
     return 0
   fi
@@ -2698,8 +2699,8 @@ nested_virtualization_test() {
     user_warned_potential_startup_issue=true
     log warn "${underline}Nested Virtualization Test:${nounderline} Detection tool for nested virtualization is missing."
   else
-    if [ "${dry_run}" = "1" ]; then
-      log notice "Nested Virtualization Test: Skipping test due to dry_run mode."
+    if [ "${dry_run_skip_commands}" = "1" ]; then
+      log notice "Nested Virtualization Test: Skipping test due to dry-run mode."
     else
       ## Check if we are a guest of virtualization.
       if root_cmd "${nested_virt_tool:-}" >/dev/null 2>&1; then
@@ -3008,7 +3009,7 @@ check_upgrades_simulation() {
     fi
   fi
 
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     packages_upgradable=false
   fi
 
@@ -3075,7 +3076,7 @@ install_pkg() {
   done
 
   if [ "${#pkg_not_installed[@]}" != '0' ]; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log notice "Skipping installation of the following packages via '--dry-run' option: '${pkg_not_installed[*]}'"
       return 0
     fi
@@ -3113,7 +3114,7 @@ test_pkg() {
   done
 
   if [ "${#pkg_not_installed[@]}" != '0' ]; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log info "Failed to locate package(s) and ignoring via '--dry-run' option: '${pkg_not_installed[*]}'"
     else
       log info "Failed to locate package(s): '${pkg_not_installed[*]}'"
@@ -3590,7 +3591,7 @@ import_virtualbox() {
   output=$(log_run notice run_as_target_user "${vboxmanage_locale_english[@]}" import "${directory_prefix}/${guest_file}.${guest_file_ext}" "${vbox_arg_normal[@]}" --dry-run) || \
     die 105 "${underline}VM Import:${nounderline} Failed to import virtual machines."
 
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log info "VM import: Skip vsys test via '--dry-run'."
   else
     case "${guest}" in
@@ -3690,7 +3691,7 @@ start_virtualbox_gui() {
 
   run_background=1
   log_run notice virtualbox
-  if [ "${dry_run}" != "1" ]; then
+  if [ "${dry_run_skip_commands}" != "1" ]; then
     log notice "VirtualBox Manager Startup Result: Launched VirtualBox GUI into the background. (pid: '${background_pid}')"
   fi
   run_background=""
@@ -4099,7 +4100,7 @@ add_user_to_vbox_group() {
 ## End installation of VirtualBox on Fedora and derived systems.
 install_virtualbox_fedora_common_end() {
   if ! has vboxmanage ; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log error "Failed to locate 'vboxmanage' program. Ignoring via '--dry-run' option."
     else
       die 1 "${underline}vboxmanage test:${nounderline} Failed to locate 'vboxmanage' program."
@@ -4114,7 +4115,7 @@ install_virtualbox_fedora_common_end() {
 ## End installation of VirtualBox on Debian and derived systems.
 install_virtualbox_debian_common_end() {
   if ! has vboxmanage ; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log error "Failed to locate 'vboxmanage' program. - Ignoring via '--dry-run' option."
     else
       die 1 "${underline}vboxmanage test:${nounderline} Failed to locate 'vboxmanage' program."
@@ -5052,7 +5053,7 @@ check_license() {
   log notice "The license will be shown in 5 seconds."
   log notice "(Use '-n' or '--non-interactive' for non-interactive mode.)"
 
-  [ "${dry_run}" != "1" ] && sleep 5
+  [ "${dry_run_skip_commands}" != "1" ] && sleep 5
 
   dialog_box=""
   ## 'whiptail' is the Debian version of Dialog with much less features.
@@ -5533,7 +5534,7 @@ get_version() {
   done
   ## this is necessary because we log will not be printed as the command is
   ## assigned to a variable at 'raw_version=$()'.
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log_run notice "${cmd_raw_version[@]}"
     return 0
   fi
@@ -5601,7 +5602,7 @@ test_file() {
   ## 'realpath' needs to be able to access the path it checks.
   ## Using '2>/dev/null' to suppress error output such as:
   ## > realpath: /home/sysmaint/dist-installer-cli-download/logs/1: No such file or directory
-  if ! real_file="$(root_cmd_loglevel="echo" dry_run=0 root_cmd realpath -- "${file}" 2>/dev/null)"; then
+  if ! real_file="$(root_cmd_loglevel="echo" dry_run_skip_commands=0 root_cmd realpath -- "${file}" 2>/dev/null)"; then
     true "INFO: realpath failed to determine the real path of file: ${file}"
     return 1
   fi
@@ -5611,7 +5612,7 @@ test_file() {
 
 
 files_already_downloaded_check() {
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log notice "files_already_downloaded_check: Creating image file '${directory_prefix}/${guest_file}.${guest_file_ext}' (sha512sums.sig and sha512sums) via '--dry-run' option."
     touch -- "${directory_prefix}/${guest_file}.${guest_file_ext}"
     touch -- "${directory_prefix}/${guest_file}.${guest_file_ext}.sha512sums.sig"
@@ -5978,9 +5979,9 @@ should_download() {
     ## 'return 1' so the result of should_download is "no".
     return 1
   fi
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log notice "Download: Creating download flag via '--dry-run' option."
-    dry_run=0 log_run notice run_as_target_user touch -- "${download_flag}"
+    dry_run_skip_commands=0 log_run notice run_as_target_user touch -- "${download_flag}"
     return 0
   fi
 
@@ -6077,7 +6078,7 @@ check_integrity() {
     return 0
   fi
 
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log notice "Integrity Check: Skipping integrity checks via '--dry-run' option."
     return 0
   fi
@@ -6143,7 +6144,7 @@ main() {
   fi
 
   if should_download; then
-    if [ "${dry_run}" != "1" ]; then
+    if [ "${dry_run_skip_commands}" != "1" ]; then
       log notice "Connectivity Test: Testing internet connection to '${url_origin}'..."
       cmd_check_internet=( 'timeout' '--foreground' "${transfer_max_time_small_file}" "${transfer_proxy_prefix[@]}" "${transfer_utility}" "${transfer_proxy_suffix[@]}" "${transfer_dryrun_opt}" "${transfer_size_opt}" "${transfer_size_test_connection}" "${url_origin}" )
       cmd_check_internet_len="${#cmd_check_internet[@]}"
@@ -6281,7 +6282,7 @@ set_default() {
   dev=""
   noupdate=""
   noupgrade=""
-  dry_run=""
+  dry_run_skip_commands=""
   getversion=""
   getopt=""
   ci=""
@@ -6364,7 +6365,7 @@ print_getopt() {
   dev=${dev}
   noupdate=${noupdate}
   noupgrade=${noupgrade}
-  dry_run=${dry_run}
+  dry_run_skip_commands=${dry_run_skip_commands}
   getversion=${getversion}
   getopt=${getopt}
   ci=${ci}
@@ -6421,7 +6422,7 @@ copy_thru_barrier() {
   source="${1}"
   dest="${2}"
   source_basename="$(basename -- "${source}")"
-  dest_realpath="$(root_cmd_loglevel="echo" dry_run=0 root_cmd realpath -- "${dest}")"
+  dest_realpath="$(root_cmd_loglevel="echo" dry_run_skip_commands=0 root_cmd realpath -- "${dest}")"
   if test_file -d "${dest_realpath}"; then
     dest_file="${dest_realpath}/${source_basename}"
   else
@@ -6540,7 +6541,7 @@ parse_opt() {
         ;;
       ## -d, --dry-run
       d|dry-run)
-        dry_run=1
+        dry_run_skip_commands=1
         ;;
       ## --virtualbox-only
       virtualbox-only)
@@ -6704,7 +6705,7 @@ Reboot into sysmaint session and rerun this installer."
       guest_version="18.0.9.5"
     fi
   fi
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     if [ -z "${guest_version}" ]; then
       log notice "Simulation: commands will be printed but not executed via '--dry-run' option."
       log notice "Version Detection: Using simulated software version via '--dry-run' option."
