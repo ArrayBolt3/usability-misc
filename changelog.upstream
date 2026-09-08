@@ -1,3 +1,36 @@
+commit 0d9dd1bdee7d108dd5acf511bc59eafc75d702be
+Merge: ea6c42b 20f1e14
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 7 01:11:38 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit 20f1e149932e1b1d9838e8b72d205908337f8e6c
+Merge: cb54c99 ea6c42b
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 6 17:16:47 2026 -0400
+
+    Merge branch 'master' into arraybolt3/trixie
+
+commit ea6c42bbc2d6e1d8c80eac56010d185cad334654
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Sep 6 17:05:05 2026 +0000
+
+    bumped changelog version
+
+commit cb54c99dc65ff8e1976ce14db2cffae619b4c517
+Merge: 5f75b07 ba94ab7
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 6 01:19:51 2026 -0400
+
+    Merge branch 'master' into arraybolt3/trixie
+
+commit 5f75b0771ff1fc6f6f75cd8a69702fd451dabf47
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Tue Sep 1 20:42:26 2026 -0400
+
+    Get VirtualBox VMs to boot again
+
 commit b041df1bd4fa6c117011b898d401229010d5ef60
 Merge: ba94ab7 146cb99
 Author: Patrick Schleizer <adrelanos@whonix.org>
