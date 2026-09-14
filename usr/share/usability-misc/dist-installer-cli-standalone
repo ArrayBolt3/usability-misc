@@ -18,7 +18,7 @@
 declare version me start_time dialog_title license adrelanos_signify \
   hulahoop_signify oracle_pgp user_home_dir directory_prefix guest \
   hypervisor interface oracle_repo log_level guest_version socks_proxy onion \
-  non_interactive dev noupdate noupgrade dry_run getversion getopt ci no_import \
+  non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
   url_version_domain run_background background_pid  \
@@ -66,8 +66,8 @@ declare version me start_time dialog_title license adrelanos_signify \
   transfer_proxy_suffix proxy curl_transfer_proxy curl_opt_ssl \
   url_guest_file url_origin signify_key signify_signer url_domain \
   url_version download_flag checkhash interface_name \
-  can_boot_virtualbox_guest_vms DIST_APTGETOPT DIST_APTGETOPT_SERIALIZED id_of_user \
-  dkms_mok_path temp_folder
+  can_boot_virtualbox_guest_vms DIST_APTGETOPT DIST_APTGETOPT_SERIALIZED \
+  id_of_user dkms_mok_path temp_folder dry_run_skip_commands
 
 ## NOTE: For reviewers and AI agents.
 ##
@@ -153,8 +153,8 @@ if was_executed "${BASH_SOURCE[0]}"; then
   SKIP_UNIT_TESTS=true
 fi
 
-# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.sh
-##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.sh
+# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
+##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
 #!/bin/bash
 
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
@@ -218,7 +218,7 @@ modprobe_remove() {
   modprobe --remove "${1}" || return 1
   return 0
 }
-##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.sh
+##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/wc-test.sh
 ##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/wc-test.sh
@@ -388,10 +388,8 @@ default_if_empty() {
     return 0
   fi
 
-  ## style-ok: allow-unchecked-printf-v -- guarded above by the
-  ## 'if ! check_variable_name ...; then return 1; fi' block; R-063's detector
-  ## only recognizes the 'check_variable_name ... || return' form, not this
-  ## equivalent if-negated guard.
+  ## style-ok: allow-unchecked-printf-v - linter misses the check_variable_name
+  ## call above.
   printf -v "${strings_bsh_var_name}" '%s' "${strings_bsh_default_value}"
 }
 
@@ -425,20 +423,25 @@ check_is_alpha_numeric() {
 validate_safe_filename() {
   local strings_bsh_varname strings_bsh_value strings_bsh_reason strings_bsh_re
 
-  ## Byte/ASCII semantics for every match below (control-char, alnum, length),
-  ## independent of the caller's locale. Without this, [[ =~ [:alnum:] ]] treats
-  ## a non-ASCII byte sequence (e.g. UTF-8 'cafe') as letters under a UTF-8
-  ## locale and ACCEPTS it, while rejecting it under C -- a locale-dependent
-  ## safe-filename check. A filename is bytes; validate it as bytes.
-  local LC_ALL=C
+  ## Don't allow any Unicode to pass the checks below.
+  local was_lc_all_set='false'
+  local OLD_LC_ALL="${LC_ALL:-}"
+  [ -v LC_ALL ] && was_lc_all_set='true'
+  export LC_ALL=C
 
   if [ -z "${1:-}" ]; then
     printf '%s\n' "$0: ERROR: ${FUNCNAME[0]}: No variable name provided to validate_safe_filename!" >&2
+    unset LC_ALL
+    [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
     return 1
   fi
 
   strings_bsh_varname="$1"
-  check_variable_name "${strings_bsh_varname}" || return 1
+  if ! check_variable_name "${strings_bsh_varname}"; then
+    unset LC_ALL
+    [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
+    return 1
+  fi
   strings_bsh_value="${!strings_bsh_varname}"
 
   if [[ -z "${strings_bsh_value}" ]]; then
@@ -458,10 +461,12 @@ validate_safe_filename() {
   elif [ "$(printf '%s' "${strings_bsh_value}" | LC_ALL=C wc -c)" -gt 255 ]; then
     strings_bsh_reason="Too long (>255 bytes)!"
   else
-    ## Allow: ASCII letters/digits (LC_ALL=C above), underscore, dash, dot, space,
+    ## Allow: ASCII letters/digits, underscore, dash, dot, space,
     ## plus, comma, equals, @, parentheses, percent, braces, square brackets
     strings_bsh_re='^[][:alnum:]_.:@+=,(){}%\[ -]+$'
     if [[ "${strings_bsh_value}" =~ ${strings_bsh_re} ]]; then
+      unset LC_ALL
+      [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
       return 0
     fi
     strings_bsh_reason="Invalid character!"
@@ -471,8 +476,10 @@ validate_safe_filename() {
 \$1 (variable name): '${strings_bsh_varname}'
 \$2 (variable content): '${strings_bsh_value}'" >&2
 
-  LC_ALL=C od -An -tx1 <<<"${strings_bsh_value}" | head --bytes="${STRINGS_BSH_REPORT_MAX}" >&2
+  od -An -tx1 <<<"${strings_bsh_value}" | head --bytes="${STRINGS_BSH_REPORT_MAX}" >&2
 
+  unset LC_ALL
+  [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
   return 1
 }
 
@@ -860,8 +867,7 @@ fi
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict - sourced library; a top-level strict-mode block would
-## leak 'set -o errexit'/'nounset' into the sourcing shell.
+## style-ok: no-strict - sourced library.
 
 # shellcheck source=./check_runtime.bsh
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/check_runtime.bsh
@@ -896,7 +902,6 @@ get_colors() {
     color_yes_or_no=no
   fi
 
-  ## Force color output even when stderr is not a TTY (e.g. captured logs).
   if test "${COLOR_FORCE_YES-}" = 'true'; then
     color_yes_or_no=yes
   fi
@@ -1378,10 +1383,6 @@ xtrace_restore() {
 ##   output_cmd_set
 ##   "${output_cmd[@]}" "INFO: starting build"
 ##
-## output_cmd is an ARRAY. Under xtrace it is a no-op (true); otherwise it is
-## 'printf %s\n', which prints its argument verbatim -- unlike 'echo', printf
-## does not eat leading '-n'/'-e' or interpret backslashes in the message.
-## output_cmd is read by the sourcing script, not here -> SC2034 is a false positive.
 # shellcheck disable=SC2034
 output_cmd_set() {
    if [ -o xtrace ]; then
@@ -1392,9 +1393,7 @@ output_cmd_set() {
 }
 
 ## Echo $SHELLOPTS with 'xtrace' present exactly once, for passing to a re-exec
-## (sudo / flock) that resets the environment so the child re-enables xtrace.
-## Adds ':xtrace' only when it is not already set, so it never accumulates a
-## superfluous duplicate.
+## that resets the environment so the child re-enables xtrace.
 shellopts_with_xtrace() {
    case ":${SHELLOPTS-}:" in
       *:xtrace:*)
@@ -1407,71 +1406,7 @@ shellopts_with_xtrace() {
 }
 ##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/xtrace.bsh
 # shellcheck source=./has.bsh
-##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
-#!/bin/bash
-
-## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
-## See the file COPYING for copying conditions.
-
-## style-ok: no-strict - sourced library.
-## style-ok: no-has - this script is 'has' itself.
-
-## This is just a simple wrapper around 'command -v' to avoid
-## spamming '>/dev/null' throughout this function. This also guards
-## against aliases and functions.
-## https://github.com/dylanaraps/pfetch/blob/pfetch#L53
-has() {
-  local _cmd _name
-
-  for _name in "$@"; do
-    _cmd="$(command -v "${_name}")" 2>/dev/null || return 1
-    ## TODO: Consider making it so that this command's only purpose is to check
-    ## for executable files. In that instance we would want to error out if
-    ## anything other than an absolute path is passed.
-    case "${_cmd}" in
-      /*)
-        [ -x "${_cmd}" ] || return 1
-        ;;
-    esac
-  done
-}
-
-is_type_file() {
-  local _name
-
-  for _name in "$@"; do
-    if ! [ "$(type -t "${_name}")" = "file" ]; then
-      return 1
-    fi
-  done
-  return 0
-}
-
-type_exists() {
-  local _name
-
-  for _name in "$@"; do
-    [ -n "$(type -t "${_name}")" ] || return 1
-  done
-  return 0
-}
-
-lsmod_deterministic() {
-  lsmod | awk 'NR>1 {print $1}' | LC_ALL='C' sort
-}
-
-kernel_module_loaded_check() {
-  lsmod_deterministic | grep --line-regexp --fixed-strings -- "${1}" >/dev/null
-}
-
-modprobe_remove() {
-  if ! kernel_module_loaded_check "${1}"; then
-    return 0
-  fi
-  modprobe --remove "${1}" || return 1
-  return 0
-}
-##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
+##### SKIP duplicate source import from file /usr/libexec/helper-scripts/has.bsh
 # shellcheck source=./trace.bsh
 ##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/trace.bsh
 #!/bin/bash
@@ -1844,8 +1779,6 @@ log_run() {
   printf -v command_without_extraneous_spaces_temp '%q ' "${@}"
   command_without_extraneous_spaces="$(printf "%s\n" "${command_without_extraneous_spaces_temp}")"
 
-  ## Skip the command (dry-run) only for callers that opt in via this specific
-  ## variable name, so an unrelated per-script 'dry_run' cannot trigger it.
   if test "${dry_run_skip_commands:-}" = "1"; then
     log "${level}" "Skipping command (dry-run): $ ${command_without_extraneous_spaces}"
     return 0
@@ -2234,8 +2167,7 @@ get_os(){
     debian_testing_or_unstable_detected=1
   fi
 
-  ## REMINDER: when Debian testing's codename advances past 'forky' (to 'duke'),
-  ## add/replace the codename checked here.
+  ## REMINDER: Debian 'forky' - change this from 'forky' to 'duke'.
   if [ "${distro_codename}" = "forky" ]; then
     log info "Debian 'testing' or 'unstable' detection: 'forky' still considered 'testing' (hardcoded in this program)"
     debian_testing_or_unstable_detected=1
@@ -2267,8 +2199,8 @@ get_os(){
       fi
     fi
     log info "Not attempting to use '--oracle-repo' on Debian 'testing' or 'unstable', good."
-    ## Debian 'testing' '/etc/os-release' has no VERSION_ID, so distro_version is
-    ## 'n/a' or empty here; return before the version check below.
+    ## In Debian 'testing' distro_version was previously observed as 'n/a' or empty, because
+    ## Debian 'testing' '/etc/os-release' does not contain VERSION_ID.
     return 0
   fi
   log info "Debian 'testing' or 'unstable' detection: 'no', not detected"
@@ -2295,7 +2227,7 @@ get_os(){
 }
 
 
-## The *_derivative_detected flags are set here for the sourcing script to read.
+## *_derivative_detected flags are used by sourcing scripts.
 # shellcheck disable=SC2034
 get_distro() {
   true "distro: ${distro}"
@@ -2821,8 +2753,8 @@ nested_virtualization_test() {
     user_warned_potential_startup_issue=true
     log warn "${underline}Nested Virtualization Test:${nounderline} Detection tool for nested virtualization is missing."
   else
-    if [ "${dry_run}" = "1" ]; then
-      log notice "Nested Virtualization Test: Skipping test due to dry_run mode."
+    if [ "${dry_run_skip_commands}" = "1" ]; then
+      log notice "Nested Virtualization Test: Skipping test due to dry-run mode."
     else
       ## Check if we are a guest of virtualization.
       if root_cmd "${nested_virt_tool:-}" >/dev/null 2>&1; then
@@ -3131,7 +3063,7 @@ check_upgrades_simulation() {
     fi
   fi
 
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     packages_upgradable=false
   fi
 
@@ -3198,7 +3130,7 @@ install_pkg() {
   done
 
   if [ "${#pkg_not_installed[@]}" != '0' ]; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log notice "Skipping installation of the following packages via '--dry-run' option: '${pkg_not_installed[*]}'"
       return 0
     fi
@@ -3236,7 +3168,7 @@ test_pkg() {
   done
 
   if [ "${#pkg_not_installed[@]}" != '0' ]; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log info "Failed to locate package(s) and ignoring via '--dry-run' option: '${pkg_not_installed[*]}'"
     else
       log info "Failed to locate package(s): '${pkg_not_installed[*]}'"
@@ -3713,7 +3645,7 @@ import_virtualbox() {
   output=$(log_run notice run_as_target_user "${vboxmanage_locale_english[@]}" import "${directory_prefix}/${guest_file}.${guest_file_ext}" "${vbox_arg_normal[@]}" --dry-run) || \
     die 105 "${underline}VM Import:${nounderline} Failed to import virtual machines."
 
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log info "VM import: Skip vsys test via '--dry-run'."
   else
     case "${guest}" in
@@ -3813,7 +3745,7 @@ start_virtualbox_gui() {
 
   run_background=1
   log_run notice virtualbox
-  if [ "${dry_run}" != "1" ]; then
+  if [ "${dry_run_skip_commands}" != "1" ]; then
     log notice "VirtualBox Manager Startup Result: Launched VirtualBox GUI into the background. (pid: '${background_pid}')"
   fi
   run_background=""
@@ -4222,7 +4154,7 @@ add_user_to_vbox_group() {
 ## End installation of VirtualBox on Fedora and derived systems.
 install_virtualbox_fedora_common_end() {
   if ! has vboxmanage ; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log error "Failed to locate 'vboxmanage' program. Ignoring via '--dry-run' option."
     else
       die 1 "${underline}vboxmanage test:${nounderline} Failed to locate 'vboxmanage' program."
@@ -4237,7 +4169,7 @@ install_virtualbox_fedora_common_end() {
 ## End installation of VirtualBox on Debian and derived systems.
 install_virtualbox_debian_common_end() {
   if ! has vboxmanage ; then
-    if [ "${dry_run}" = "1" ]; then
+    if [ "${dry_run_skip_commands}" = "1" ]; then
       log error "Failed to locate 'vboxmanage' program. - Ignoring via '--dry-run' option."
     else
       die 1 "${underline}vboxmanage test:${nounderline} Failed to locate 'vboxmanage' program."
@@ -5175,7 +5107,7 @@ check_license() {
   log notice "The license will be shown in 5 seconds."
   log notice "(Use '-n' or '--non-interactive' for non-interactive mode.)"
 
-  [ "${dry_run}" != "1" ] && sleep 5
+  [ "${dry_run_skip_commands}" != "1" ] && sleep 5
 
   dialog_box=""
   ## 'whiptail' is the Debian version of Dialog with much less features.
@@ -5656,7 +5588,7 @@ get_version() {
   done
   ## this is necessary because we log will not be printed as the command is
   ## assigned to a variable at 'raw_version=$()'.
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log_run notice "${cmd_raw_version[@]}"
     return 0
   fi
@@ -5724,7 +5656,7 @@ test_file() {
   ## 'realpath' needs to be able to access the path it checks.
   ## Using '2>/dev/null' to suppress error output such as:
   ## > realpath: /home/sysmaint/dist-installer-cli-download/logs/1: No such file or directory
-  if ! real_file="$(root_cmd_loglevel="echo" dry_run=0 root_cmd realpath -- "${file}" 2>/dev/null)"; then
+  if ! real_file="$(root_cmd_loglevel="echo" dry_run_skip_commands=0 root_cmd realpath -- "${file}" 2>/dev/null)"; then
     true "INFO: realpath failed to determine the real path of file: ${file}"
     return 1
   fi
@@ -5734,7 +5666,7 @@ test_file() {
 
 
 files_already_downloaded_check() {
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log notice "files_already_downloaded_check: Creating image file '${directory_prefix}/${guest_file}.${guest_file_ext}' (sha512sums.sig and sha512sums) via '--dry-run' option."
     touch -- "${directory_prefix}/${guest_file}.${guest_file_ext}"
     touch -- "${directory_prefix}/${guest_file}.${guest_file_ext}.sha512sums.sig"
@@ -6101,9 +6033,9 @@ should_download() {
     ## 'return 1' so the result of should_download is "no".
     return 1
   fi
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log notice "Download: Creating download flag via '--dry-run' option."
-    dry_run=0 log_run notice run_as_target_user touch -- "${download_flag}"
+    dry_run_skip_commands=0 log_run notice run_as_target_user touch -- "${download_flag}"
     return 0
   fi
 
@@ -6200,7 +6132,7 @@ check_integrity() {
     return 0
   fi
 
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     log notice "Integrity Check: Skipping integrity checks via '--dry-run' option."
     return 0
   fi
@@ -6266,7 +6198,7 @@ main() {
   fi
 
   if should_download; then
-    if [ "${dry_run}" != "1" ]; then
+    if [ "${dry_run_skip_commands}" != "1" ]; then
       log notice "Connectivity Test: Testing internet connection to '${url_origin}'..."
       cmd_check_internet=( 'timeout' '--foreground' "${transfer_max_time_small_file}" "${transfer_proxy_prefix[@]}" "${transfer_utility}" "${transfer_proxy_suffix[@]}" "${transfer_dryrun_opt}" "${transfer_size_opt}" "${transfer_size_test_connection}" "${url_origin}" )
       cmd_check_internet_len="${#cmd_check_internet[@]}"
@@ -6404,7 +6336,7 @@ set_default() {
   dev=""
   noupdate=""
   noupgrade=""
-  dry_run=""
+  dry_run_skip_commands=""
   getversion=""
   getopt=""
   ci=""
@@ -6487,7 +6419,7 @@ print_getopt() {
   dev=${dev}
   noupdate=${noupdate}
   noupgrade=${noupgrade}
-  dry_run=${dry_run}
+  dry_run_skip_commands=${dry_run_skip_commands}
   getversion=${getversion}
   getopt=${getopt}
   ci=${ci}
@@ -6544,7 +6476,7 @@ copy_thru_barrier() {
   source="${1}"
   dest="${2}"
   source_basename="$(basename -- "${source}")"
-  dest_realpath="$(root_cmd_loglevel="echo" dry_run=0 root_cmd realpath -- "${dest}")"
+  dest_realpath="$(root_cmd_loglevel="echo" dry_run_skip_commands=0 root_cmd realpath -- "${dest}")"
   if test_file -d "${dest_realpath}"; then
     dest_file="${dest_realpath}/${source_basename}"
   else
@@ -6663,7 +6595,7 @@ parse_opt() {
         ;;
       ## -d, --dry-run
       d|dry-run)
-        dry_run=1
+        dry_run_skip_commands=1
         ;;
       ## --virtualbox-only
       virtualbox-only)
@@ -6827,7 +6759,7 @@ Reboot into sysmaint session and rerun this installer."
       guest_version="18.0.9.5"
     fi
   fi
-  if [ "${dry_run}" = "1" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
     if [ -z "${guest_version}" ]; then
       log notice "Simulation: commands will be printed but not executed via '--dry-run' option."
       log notice "Version Detection: Using simulated software version via '--dry-run' option."
