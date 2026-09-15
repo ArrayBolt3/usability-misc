@@ -18,7 +18,7 @@
 declare version me start_time dialog_title license adrelanos_signify \
   hulahoop_signify oracle_pgp user_home_dir directory_prefix guest \
   hypervisor interface oracle_repo log_level guest_version socks_proxy onion \
-  non_interactive dev noupdate noupgrade dry_run_skip_commands getversion getopt ci no_import \
+  non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
   url_version_domain run_background background_pid  \
@@ -66,8 +66,8 @@ declare version me start_time dialog_title license adrelanos_signify \
   transfer_proxy_suffix proxy curl_transfer_proxy curl_opt_ssl \
   url_guest_file url_origin signify_key signify_signer url_domain \
   url_version download_flag checkhash interface_name \
-  can_boot_virtualbox_guest_vms DIST_APTGETOPT DIST_APTGETOPT_SERIALIZED id_of_user \
-  dkms_mok_path temp_folder
+  can_boot_virtualbox_guest_vms DIST_APTGETOPT DIST_APTGETOPT_SERIALIZED \
+  id_of_user dkms_mok_path temp_folder dry_run_skip_commands
 
 ## NOTE: For reviewers and AI agents.
 ##
@@ -160,10 +160,8 @@ fi
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict -- this file is 'source'd, so a strict-mode block here
-## would change the SOURCING shell's behaviour rather than apply to a shell of
-## its own. The sourcer owns its strict-mode settings.
-## style-ok: no-has -- this is the definition of 'has'; it cannot call itself.
+## style-ok: no-strict - sourced library.
+## style-ok: no-has - this script is 'has' itself.
 
 ## This is just a simple wrapper around 'command -v' to avoid
 ## spamming '>/dev/null' throughout this function. This also guards
@@ -174,10 +172,9 @@ has() {
 
   for _name in "$@"; do
     _cmd="$(command -v "${_name}")" 2>/dev/null || return 1
-    ## 'command -v' prints a bare word for builtins, functions, aliases and
-    ## keywords rather than a path. Testing that word with '-x' would resolve
-    ## it as a RELATIVE path in the current directory, so 'has printf' failed
-    ## even though printf is always available. Only a path is worth testing.
+    ## TODO: Consider making it so that this command's only purpose is to check
+    ## for executable files. In that instance we would want to error out if
+    ## anything other than an absolute path is passed.
     case "${_cmd}" in
       /*)
         [ -x "${_cmd}" ] || return 1
@@ -343,10 +340,7 @@ read_integer_file() {
       "$0: ERROR: Target file '${target_file}' not readable!" >&2
     return 1
   fi
-  ## NO '--': stcat takes every argument as a path, so it reads the separator
-  ## itself as a filename and dies with FileNotFoundError. R-062's negative
-  ## half; the static gate now denylists it.
-  if ! file_contents="$(stcat "${target_file}")"; then
+  if ! file_contents="$(stcat -- "${target_file}")"; then
     sanitize-echo --max-length "${STRINGS_BSH_REPORT_MAX}" -- \
       "$0: ERROR: Cannot stcat target file '${target_file}'!" >&2
     return 1
@@ -394,6 +388,8 @@ default_if_empty() {
     return 0
   fi
 
+  ## style-ok: allow-unchecked-printf-v - linter misses the check_variable_name
+  ## call above.
   printf -v "${strings_bsh_var_name}" '%s' "${strings_bsh_default_value}"
 }
 
@@ -427,13 +423,25 @@ check_is_alpha_numeric() {
 validate_safe_filename() {
   local strings_bsh_varname strings_bsh_value strings_bsh_reason strings_bsh_re
 
+  ## Don't allow any Unicode to pass the checks below.
+  local was_lc_all_set='false'
+  local OLD_LC_ALL="${LC_ALL:-}"
+  [ -v LC_ALL ] && was_lc_all_set='true'
+  export LC_ALL=C
+
   if [ -z "${1:-}" ]; then
     printf '%s\n' "$0: ERROR: ${FUNCNAME[0]}: No variable name provided to validate_safe_filename!" >&2
+    unset LC_ALL
+    [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
     return 1
   fi
 
   strings_bsh_varname="$1"
-  check_variable_name "${strings_bsh_varname}" || return 1
+  if ! check_variable_name "${strings_bsh_varname}"; then
+    unset LC_ALL
+    [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
+    return 1
+  fi
   strings_bsh_value="${!strings_bsh_varname}"
 
   if [[ -z "${strings_bsh_value}" ]]; then
@@ -453,10 +461,12 @@ validate_safe_filename() {
   elif [ "$(printf '%s' "${strings_bsh_value}" | LC_ALL=C wc -c)" -gt 255 ]; then
     strings_bsh_reason="Too long (>255 bytes)!"
   else
-    ## Allow: letters/digits (locale-aware), underscore, dash, dot, space,
+    ## Allow: ASCII letters/digits, underscore, dash, dot, space,
     ## plus, comma, equals, @, parentheses, percent, braces, square brackets
     strings_bsh_re='^[][:alnum:]_.:@+=,(){}%\[ -]+$'
     if [[ "${strings_bsh_value}" =~ ${strings_bsh_re} ]]; then
+      unset LC_ALL
+      [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
       return 0
     fi
     strings_bsh_reason="Invalid character!"
@@ -466,8 +476,10 @@ validate_safe_filename() {
 \$1 (variable name): '${strings_bsh_varname}'
 \$2 (variable content): '${strings_bsh_value}'" >&2
 
-  LC_ALL=C od -An -tx1 <<<"${strings_bsh_value}" | head --bytes="${STRINGS_BSH_REPORT_MAX}" >&2
+  od -An -tx1 <<<"${strings_bsh_value}" | head --bytes="${STRINGS_BSH_REPORT_MAX}" >&2
 
+  unset LC_ALL
+  [ "${was_lc_all_set}" = 'true' ] && export LC_ALL="${OLD_LC_ALL}"
   return 1
 }
 
@@ -741,8 +753,7 @@ string_bsh_tests() {
   run_test "safe_filename: rejects leading dash" validate_safe_filename 1 test_value "-option"
   run_test "safe_filename: accepts colon" validate_safe_filename 0 test_value "test:test"
   run_test "safe_filename: rejects overlong name" validate_safe_filename 1 test_value "$(printf 'a%.0s' {1..256})"
-  ## TODO: unclear if this is possible without unicode-show
-  #run_test "safe_filename: rejects unicode"                 validate_safe_filename 1 test_value $'caf\xC3\xA9'
+  run_test "safe_filename: rejects unicode" validate_safe_filename 1 test_value $'caf\xC3\xA9'
 
   run_test "one_line: rejects empty" check_is_not_empty_and_only_one_line 1 test_value ""
   run_test "one_line: rejects only whitespace/newlines" check_is_not_empty_and_only_one_line 1 test_value $'\n\n   '
@@ -856,6 +867,8 @@ fi
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
+## style-ok: no-strict - sourced library.
+
 # shellcheck source=./check_runtime.bsh
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/check_runtime.bsh
 
@@ -889,8 +902,7 @@ get_colors() {
     color_yes_or_no=no
   fi
 
-  ## TODO: Rename to 'COLOR_FORCE_YES=true'?
-  if test "${ASSUME_TERM_PRESENT-}" = 'true'; then
+  if test "${COLOR_FORCE_YES-}" = 'true'; then
     color_yes_or_no=yes
   fi
 
@@ -1067,11 +1079,10 @@ fi
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict -- sourced library; a top-level strict-mode block
-## would leak into the sourcing shell.
+## style-ok: no-strict - sourced library.
 
 ## 'local' is not in POSIX proper but is supported by every shell this ships
-## on (dash, busybox); shellcheck's SC3043 is a portability nag, not a bug here.
+## on (bash, busybox, dash).
 # shellcheck disable=SC3043
 
 ## NOTE: Must not include bashisms!
@@ -1319,8 +1330,7 @@ capitalize_first_char(){
 ## Copyright (C) 2012 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict -- sourced library; a top-level strict-mode block
-## would leak 'set -o errexit'/'nounset' into the sourcing shell.
+## style-ok: no-strict - sourced library.
 
 ## AI-Assisted
 
@@ -1365,23 +1375,34 @@ xtrace_restore() {
    true "INFO: ${FUNCNAME[0]} called by FUNCNAME: ${FUNCNAME[1]:-}"
 }
 
-## Picks 'true' (no-op) when xtrace is on, 'echo' when xtrace is off.
+## Picks 'true' (no-op) when xtrace is on, 'printf %s\n' when xtrace is off.
 ## Lets a script print user-visible status lines without doubling them
 ## up with xtrace traces of those same printf calls when -x is on.
 ##
 ## Usage:
 ##   output_cmd_set
-##   $output_cmd "INFO: starting build"
+##   "${output_cmd[@]}" "INFO: starting build"
+##
+# shellcheck disable=SC2034
 output_cmd_set() {
    if [ -o xtrace ]; then
-      output_cmd="true"
-      ## TODO
-      #output_cmd=( true )
+      output_cmd=( true )
    else
-      output_cmd="echo"
-      ## TODO
-      #output_cmd=( printf '%s\n' )
+      output_cmd=( printf '%s\n' )
    fi
+}
+
+## Echo $SHELLOPTS with 'xtrace' present exactly once, for passing to a re-exec
+## that resets the environment so the child re-enables xtrace.
+shellopts_with_xtrace() {
+   case ":${SHELLOPTS-}:" in
+      *:xtrace:*)
+         printf '%s' "${SHELLOPTS-}"
+         ;;
+      *)
+         printf '%s' "${SHELLOPTS-}:xtrace"
+         ;;
+   esac
 }
 ##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/xtrace.bsh
 # shellcheck source=./has.bsh
@@ -1393,8 +1414,7 @@ output_cmd_set() {
 ## Copyright (C) 2012 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict -- sourced library; a top-level strict-mode block
-## would leak 'set -o errexit'/'nounset' into the sourcing shell.
+## style-ok: no-strict - sourced library.
 
 ## AI-Assisted
 
@@ -1513,8 +1533,11 @@ process_backtrace() {
 }
 ##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/trace.bsh
 
-if ! type_exists stecho sanitize-string; then
-  printf '%s\n' "$0: ERROR: stecho and/or sanitize-string missing."
+stecho_bin="${HELPER_SCRIPTS_PATH:-}/usr/bin/stecho"
+sanitize_string_bin="${HELPER_SCRIPTS_PATH:-}/usr/bin/sanitize-string"
+
+if ! has "${stecho_bin}" || ! has "${sanitize_string_bin}"; then
+  printf '%s\n' "$0: ERROR: stecho and/or sanitize-string missing ('${stecho_bin}', '${sanitize_string_bin}')."
   printf '%s\n' "$0: INFO: function_trace:"
   function_trace
   printf '%s\n' "$0: INFO: process_backtrace:"
@@ -1642,7 +1665,7 @@ log() {
     *)
       ## Avoid recursion into log() on unsupported type; print directly.
       #log bug "Unsupported log type specified: '${log_type}'"
-      stecho "${0##*/}: [${red}BUG${nocolor}]: Unsupported log type specified: '${log_type}'" >&2
+      "${stecho_bin}" "${0##*/}: [${red}BUG${nocolor}]: Unsupported log type specified: '${log_type}'" >&2
       die 1 "Please report this bug."
       return 0
       ;;
@@ -1655,14 +1678,14 @@ log() {
   fi
   log_level_colorized="[${log_color}${log_type_up}${nocolor}]"
   log_content="${*}"
-  log_content="$(printf '%s' "${log_content}" | sanitize-string -- "${LOG_MAX_LEN:-nolimit}")"
+  log_content="$(printf '%s' "${log_content}" | "${sanitize_string_bin}" -- "${LOG_MAX_LEN:-nolimit}")"
   ## error logs are the minimum and should always be printed, even if
   ## failing to assign a correct log type
   ## send bugs and error to stdout and stderr
   log_full="${log_source_script} ${log_who_ami_maybe-}${log_level_colorized}: ${log_content}"
   case "${log_type}" in
     bug|error)
-      stecho "${log_full}" >&2
+      "${stecho_bin}" "${log_full}" >&2
       return 0
       ;;
     null)
@@ -1681,7 +1704,7 @@ log() {
   fi
 
   if [ "${should_print}" = 1 ]; then
-    stecho "${log_full}" >&2
+    "${stecho_bin}" "${log_full}" >&2
   fi
 
   return 0
@@ -1756,8 +1779,6 @@ log_run() {
   printf -v command_without_extraneous_spaces_temp '%q ' "${@}"
   command_without_extraneous_spaces="$(printf "%s\n" "${command_without_extraneous_spaces_temp}")"
 
-  ## Skip the command (dry-run) only for callers that opt in via this specific
-  ## variable name, so an unrelated per-script 'dry_run' cannot trigger it.
   if test "${dry_run_skip_commands:-}" = "1"; then
     log "${level}" "Skipping command (dry-run): $ ${command_without_extraneous_spaces}"
     return 0
@@ -2115,9 +2136,9 @@ get_os(){
           ;;
       esac
       if [ -n "${WSLENV:-}" ]; then
-        distro="${distro}${WSLENV+ on Windows 10 [WSL2]}"
+        distro="${distro}${WSLENV+ on Windows 10/11 [WSL2]}"
       elif [ -z "${kernel%%*-Microsoft}" ]; then
-        distro="${distro} on Windows 10 [WSL1]"
+        distro="${distro} on Windows 10/11 [WSL1]"
       fi
     ;;
     Haiku)
@@ -2146,7 +2167,7 @@ get_os(){
     debian_testing_or_unstable_detected=1
   fi
 
-  ## TODO: Debian 'forky' - change this from 'forky' to 'duke'.
+  ## REMINDER: Debian 'forky' - change this from 'forky' to 'duke'.
   if [ "${distro_codename}" = "forky" ]; then
     log info "Debian 'testing' or 'unstable' detection: 'forky' still considered 'testing' (hardcoded in this program)"
     debian_testing_or_unstable_detected=1
@@ -2169,9 +2190,9 @@ get_os(){
 
   if [ "${debian_testing_or_unstable_detected}" = "1" ]; then
     log notice "Debian 'testing' or 'unstable' detection: 'yes', detected"
-    if test "${oracle_repo}" = "1"; then
+    if test "${oracle_repo:-}" = "1"; then
       log error "You are attempting to use '--oracle-repo' on Debian 'testing' or 'unstable'. This is impossible."
-      if test "${ci}" = "1"; then
+      if test "${ci:-}" = "1"; then
         die 0 "${underline}Distribution Test Result:${nounderline} Oracle doesn't provide a Debian 'testing' or 'unstable' repository. Skipped on CI to avoid breaking the CI 'testing' or 'unstable'."
       else
         die 101 "${underline}Distribution Test Result:${nounderline} Oracle doesn't provide a Debian 'testing' or 'unstable' repository."
@@ -2206,6 +2227,8 @@ get_os(){
 }
 
 
+## *_derivative_detected flags are used by sourcing scripts.
+# shellcheck disable=SC2034
 get_distro() {
   true "distro: ${distro}"
   case "${os}" in
@@ -2403,8 +2426,7 @@ check_not_qubes_template() {
 ## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict -- sourced library; a top-level strict-mode block
-## would leak 'set -o errexit'/'nounset' into the sourcing shell.
+## style-ok: no-strict -- sourced library.
 
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/ip_syntax.sh
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/log_run_die.sh

@@ -11,7 +11,7 @@
 declare version me start_time dialog_title license adrelanos_signify \
   hulahoop_signify oracle_pgp user_home_dir directory_prefix guest \
   hypervisor interface oracle_repo log_level guest_version socks_proxy onion \
-  non_interactive dev noupdate noupgrade dry_run_skip_commands getversion getopt ci no_import \
+  non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
   url_version_domain run_background background_pid  \
@@ -59,8 +59,8 @@ declare version me start_time dialog_title license adrelanos_signify \
   transfer_proxy_suffix proxy curl_transfer_proxy curl_opt_ssl \
   url_guest_file url_origin signify_key signify_signer url_domain \
   url_version download_flag checkhash interface_name \
-  can_boot_virtualbox_guest_vms DIST_APTGETOPT DIST_APTGETOPT_SERIALIZED id_of_user \
-  dkms_mok_path temp_folder
+  can_boot_virtualbox_guest_vms DIST_APTGETOPT DIST_APTGETOPT_SERIALIZED \
+  id_of_user dkms_mok_path temp_folder dry_run_skip_commands
 
 ## NOTE: For reviewers and AI agents.
 ##
