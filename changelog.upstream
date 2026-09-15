@@ -1,3 +1,85 @@
+commit 5088d5615324f5e82118e7d49578dddf5d8d2f11
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 14 02:01:07 2026 -0400
+
+    build
+
+commit 6ebb403a4b19c90b159392cd8cdb75e165b2b273
+Merge: a38e40d 4e35675
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 14 01:59:23 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit a38e40db1acb7549b66f64c8db66a4de17c08e3e
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Sep 13 09:05:58 2026 -0400
+
+    build
+
+commit 4e35675e0a89503692a848af4a8d50758c275654
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Fri Sep 11 17:23:50 2026 -0400
+
+    Shorten overly long line
+
+commit a245167d6c8e74ac9c8dd7a4439d50c83d661e43
+Merge: d4d2090 2f07dcb
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Fri Sep 11 17:14:07 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit 2f07dcb17661f4d9b074a9373d60e87b5a7a1aae
+Merge: 3f49b10 e3de8d0
+Author: claude <noreply@anthropic.com>
+Date:   Tue Sep 8 14:07:53 2026 -0400
+
+    Merge branch 'master' into ai
+
+commit e3de8d00b68f5fb8bbb7c8738b6fe0b6940e2a7a
+Merge: 97970d8 d4d2090
+Author: claude <noreply@anthropic.com>
+Date:   Tue Sep 8 14:07:52 2026 -0400
+
+    Merge remote-tracking branch 'upstream/master'
+
+commit d4d20903b95bf50eabdd78f30724f54e0d52961a
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Tue Sep 8 15:31:11 2026 +0000
+
+    bumped changelog version
+
+commit 3f49b10584669971b09109d81b5c2f5aa2c93f6c
+Author: claude (dev474 c7439536-fad8-4884-b71a-d2f3c4c23905) <noreply@anthropic.com>
+Date:   Mon Sep 7 11:51:19 2026 -0400
+
+    rename has.sh to has.bsh (bashism convention)
+
+    Sourced helper-scripts lib uses bashisms; .bsh marks it. Path-only edit.
+
+commit 4ed13de30cd8b215638891f3c0413ddb6b6884e0
+Merge: 07a8c26 97970d8
+Author: claude (dev474 c7439536-fad8-4884-b71a-d2f3c4c23905) <noreply@anthropic.com>
+Date:   Mon Sep 7 11:51:19 2026 -0400
+
+    Merge branch 'master' into ai
+
+commit 97970d8b79ab39a0350ef199f202b88334ed2ed6
+Merge: ea6c42b 20f1e14
+Author: claude (dev474 c7439536-fad8-4884-b71a-d2f3c4c23905) <noreply@anthropic.com>
+Date:   Mon Sep 7 11:51:18 2026 -0400
+
+    Merge remote-tracking branch 'ArrayBolt3/arraybolt3/trixie'
+
+commit 07a8c263fb0ad2e61ec1c6f44cda95cabe9cc426
+Author: claude (dev478 589781b1-284b-4fe1-9193-eb6f3690d8fd) <noreply@anthropic.com>
+Date:   Mon Sep 7 10:33:23 2026 -0400
+
+    dist-installer-cli: rename dry_run to dry_run_skip_commands
+
+    Follows the shared log_run/root_cmd rename; one flag drives both the installer's dry-run guards and command-skipping, so --dry-run still skips every mutating command. Standalone mirrors the rename surgically. Local style gate overridden (approved): its findings are pre-existing debt (R-010 LC_ALL is contraindicated by the installer's locale support; standalone SC2250 are stale inlined helpers), none on changed lines, and the repo's CI does not enforce dist-ai-style here.
+
 commit 0d9dd1bdee7d108dd5acf511bc59eafc75d702be
 Merge: ea6c42b 20f1e14
 Author: Patrick Schleizer <adrelanos@whonix.org>
