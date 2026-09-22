@@ -578,7 +578,7 @@ string_quote_safe() {
   LC_ALL=C printf '%q' "$1"
 }
 
-## success: whole numbers such as 1 2 3 456 etc. (purely numeric only) (isnum)
+## success: whole positive numbers such as 1 2 3 456 etc., and 0. (purely numeric only) (isnum)
 ## fail:
 ## 5.5
 ## 5,500
@@ -594,7 +594,14 @@ is_whole_number() {
 
 ## same results as is_whole_number, but also allows negative numbers
 is_integer(){
-  printf '%d' "$1" >/dev/null 2>&1 || return 1
+  [[ "$1" =~ ^(0|-?[1-9][0-9]*)$ ]]
+}
+
+## same as is_whole_number, but rejects 0
+is_positive_integer() {
+  is_whole_number "$1" || return 1
+  [ "$1" = "0" ] && return 1
+  return 0
 }
 
 ## NOTE: Duplicated in package 'uwt' file 'curl.anondist'.
@@ -1536,12 +1543,8 @@ process_backtrace() {
 stecho_bin="${HELPER_SCRIPTS_PATH:-}/usr/bin/stecho"
 sanitize_string_bin="${HELPER_SCRIPTS_PATH:-}/usr/bin/sanitize-string"
 
-## Absolute path via HELPER_SCRIPTS_PATH (no PATH mutation): resolves for an
-## installed system (empty -> /usr/bin) and a source checkout. The
-## dist-installer-cli STANDALONE, though, runs WITHOUT helper-scripts installed and
-## defines shim FUNCTIONS named stecho / sanitize-string; when the binary is absent
-## at the path, fall back to the bare name so a shim (or a PATH binary) resolves it
-## rather than aborting.
+## Fall back to $PATH or static functions so dist-installer-cli-standalone
+## works.
 has "${stecho_bin}" || stecho_bin="stecho"
 has "${sanitize_string_bin}" || sanitize_string_bin="sanitize-string"
 
@@ -1880,7 +1883,8 @@ root_cmd(){
     su)
       ## Thanks to Congelli501 for su to not mess with quotes.
       ## https://stackoverflow.com/a/32966744/2605155
-      cmd="$(command -v -- "${1}")"
+      ## Use a fixed secure PATH to avoid running the wrong executable.
+      cmd="$(PATH="/usr/sbin:/usr/bin:/sbin:/bin" command -v -- "${1}")"
       shift
       log_run "${root_cmd_loglevel}" su root -s "${cmd}" -- "${@}"
       ;;
@@ -2565,17 +2569,16 @@ range_arg(){
   key="${1}"
   var="${2}"
   shift 2
-  list="${*:-}"
-  #range="${list#"${1} "}"
-  if [ -n "${var:-}" ]; then
+  list=( "$@" )
+  if [ -n "${var}" ]; then
     success=0
-    for tests in ${list:-}; do
+    for test in "${list[@]}"; do
       ## only evaluate if matches all chars
-      [ "${var:-}" = "${tests}" ] && success=1 && break
+      [ "${var}" = "${test}" ] && success=1 && break
     done
     ## if not within range, fail and show the fixed range that can be used
     if [ "${success}" -eq 0 ]; then
-      die 2 "Option '${key}' cannot be '${var:-}'. Possible values: '${list}'"
+      die 2 "Option '${key}' cannot be '${var}'. Possible values: '${list[*]}'"
     fi
   fi
 }
@@ -3892,100 +3895,91 @@ check_installed_debian() {
 
 
 disable_kvm_virt_at_load() {
-  ## The KVM hot-unload logic below is commented out; its locals (kvm_variant,
-  ## kvm_kernel_module_found, ...) are declared only when it is re-enabled.
+  local kvm_variant kvm_kernel_modules_unload_failed \
+  kvm_kernel_module_reload_success kvm_kernel_module_found
 
   ## https://github.com/Kicksecure/usability-misc/blob/master/usr/lib/modprobe.d/usability-misc.conf
 
-  if test -f /etc/modprobe.d/disable-kvm-virt-at-load.conf; then
-    log notice "Kernel modules configuration: disabling previous KVM enable_virt_at_load workaround.
-https://forums.kicksecure.com/t/vboxdrv-service-fails-to-start/1730/7"
-    root_cmd_loglevel=notice root_cmd "${safe_rm_cmd[@]}" --force -- /etc/modprobe.d/disable-kvm-virt-at-load.conf
-    root_cmd_loglevel=notice root_cmd touch /var/run/reboot-required
+  log notice "Kernel modules configuration: disabling KVM enable_virt_at_load to avoid conflicts with VirtualBox (KVM remains usable)."
+  printf '%s\n' "\
+## Prevent VirtualBox and KVM from conflicting. This does not break KVM.
+options kvm enable_virt_at_load=0" \
+    | root_cmd tee -- /etc/modprobe.d/disable-kvm-virt-at-load.conf >/dev/null
+  log notice "Kernel modules configuration: File '/etc/modprobe.d/disable-kvm-virt-at-load.conf' contents:"
+  cat -- /etc/modprobe.d/disable-kvm-virt-at-load.conf || true
+  log notice "Kernel modules configuration: KVM enable_virt_at_load disabled (modprobe.d configured)."
+
+  kvm_variant='unknown'
+  kvm_kernel_module_found=''
+  if kernel_module_loaded_check "kvm_intel"; then
+    kvm_kernel_module_found='true'
+    kvm_variant='kvm_intel'
+    log info "Kernel modules configuration: KVM module variant active: '${kvm_variant}'."
+  fi
+  if kernel_module_loaded_check "kvm_amd"; then
+    kvm_kernel_module_found='true'
+    kvm_variant='kvm_amd'
+    log info "Kernel modules configuration: KVM module variant active: '${kvm_variant}'."
+  fi
+  if kernel_module_loaded_check "kvm"; then
+    kvm_kernel_module_found='true'
+    log info "Kernel modules configuration: KVM main module active: 'kvm'."
+    if [ "$kvm_variant" = "unknown" ]; then
+      ## KVM hot unload will almost certainly fail if we can't detect the KVM
+      ## variant, as the core KVM module requires a helper module for the
+      ## specific CPU architecture. Warn, but try to unload anyway.
+      log warn "Kernel modules configuration: KVM main module loaded but variant not detected; hot unload may fail."
+      kvm_variant='none'
+    fi
   fi
 
-  return 0
+  if ! [ "$kvm_kernel_module_found" = 'true' ]; then
+    log notice "Kernel modules configuration: no KVM kernel modules loaded (OK)."
+    return 0
+  fi
 
-#   log notice "Kernel modules configuration: disabling KVM enable_virt_at_load to avoid conflicts with VirtualBox (KVM remains usable)."
-#   printf '%s\n' "\
-# ## Prevent VirtualBox and KVM from conflicting. This does not break KVM.
-# options kvm enable_virt_at_load=0" \
-#     | root_cmd tee -- /etc/modprobe.d/disable-kvm-virt-at-load.conf >/dev/null
-#   log notice "Kernel modules configuration: File '/etc/modprobe.d/disable-kvm-virt-at-load.conf' contents:"
-#   cat -- /etc/modprobe.d/disable-kvm-virt-at-load.conf || true
-#   log notice "Kernel modules configuration: KVM enable_virt_at_load disabled (modprobe.d configured)."
-#
-#   kvm_variant='unknown'
-#   kvm_kernel_module_found=''
-#   if kernel_module_loaded_check "kvm_intel"; then
-#     kvm_kernel_module_found='true'
-#     kvm_variant='kvm_intel'
-#     log info "Kernel modules configuration: KVM module variant active: '${kvm_variant}'."
-#   fi
-#   if kernel_module_loaded_check "kvm_amd"; then
-#     kvm_kernel_module_found='true'
-#     kvm_variant='kvm_amd'
-#     log info "Kernel modules configuration: KVM module variant active: '${kvm_variant}'."
-#   fi
-#   if kernel_module_loaded_check "kvm"; then
-#     kvm_kernel_module_found='true'
-#     log info "Kernel modules configuration: KVM main module active: 'kvm'."
-#     if [ "$kvm_variant" = "unknown" ]; then
-#       ## KVM hot unload will almost certainly fail if we can't detect the KVM
-#       ## variant, as the core KVM module requires a helper module for the
-#       ## specific CPU architecture. Warn, but try to unload anyway.
-#       log warn "Kernel modules configuration: KVM main module loaded but variant not detected; hot unload may fail."
-#       kvm_variant='none'
-#     fi
-#   fi
-#
-#   if ! [ "$kvm_kernel_module_found" = 'true' ]; then
-#     log notice "Kernel modules configuration: no KVM kernel modules loaded (OK)."
-#     return 0
-#   fi
-#
-#   ## Hot unloading KVM kernel module if possible. This is necessary for VM
-#   ## autostart to be functional later.
-#   log notice "Kernel modules configuration: attempting hot unload of KVM kernel modules (required for VirtualBox auto-start)."
-#
-#   kvm_kernel_modules_unload_failed='true'
-#   if [ "${kvm_variant}" = 'unknown' ]; then
-#     if root_cmd_loglevel=notice root_cmd modprobe --remove -- 'kvm'; then
-#       kvm_kernel_modules_unload_failed='false'
-#     fi
-#   elif [ "${kvm_variant}" = 'none' ]; then
-#     if root_cmd_loglevel=notice root_cmd modprobe --remove -- 'kvm'; then
-#       kvm_kernel_modules_unload_failed='false'
-#     fi
-#   else
-#     if root_cmd_loglevel=notice root_cmd modprobe --remove -- "${kvm_variant}" "kvm"; then
-#       kvm_kernel_modules_unload_failed='false'
-#     fi
-#   fi
-#
-#   if [ "${kvm_kernel_modules_unload_failed}" = 'true' ]; then
-#     log warn "Kernel modules configuration: failed to unload KVM kernel modules; reboot may be required for VirtualBox to function."
-#     can_boot_virtualbox_guest_vms='false'
-#     return 0
-#   fi
-#
-#   kvm_kernel_module_reload_success='true'
-#   if [ "${kvm_variant}" = 'unknown' ]; then
-#     ## Try to put the variant kernel module back. It is not fatal if this fails.
-#     root_cmd_loglevel=notice root_cmd modprobe -- 'kvm' || kvm_kernel_module_reload_success='false'
-#   elif [ "${kvm_variant}" = 'none' ]; then
-#     root_cmd_loglevel=notice root_cmd modprobe -- 'kvm' || kvm_kernel_module_reload_success='false'
-#   else
-#     root_cmd_loglevel=notice root_cmd modprobe -- 'kvm' "${kvm_variant}" || kvm_kernel_module_reload_success='false'
-#   fi
-#
-#   if [ "${kvm_kernel_module_reload_success}" = 'false' ]; then
-#     log warn "Kernel modules configuration: failed to reload KVM kernel modules; reboot may be required for VirtualBox and KVM to function."
-#     can_boot_virtualbox_guest_vms='false'
-#     return 0
-#   fi
-#
-#   log notice "Kernel modules configuration: KVM kernel modules reloaded; VirtualBox should function."
+  ## Hot unloading KVM kernel module if possible. This is necessary for VM
+  ## autostart to be functional later.
+  log notice "Kernel modules configuration: attempting hot unload of KVM kernel modules (required for VirtualBox auto-start)."
+
+  kvm_kernel_modules_unload_failed='true'
+  if [ "${kvm_variant}" = 'unknown' ]; then
+    if root_cmd_loglevel=notice root_cmd modprobe --remove -- 'kvm'; then
+      kvm_kernel_modules_unload_failed='false'
+    fi
+  elif [ "${kvm_variant}" = 'none' ]; then
+    if root_cmd_loglevel=notice root_cmd modprobe --remove -- 'kvm'; then
+      kvm_kernel_modules_unload_failed='false'
+    fi
+  else
+    if root_cmd_loglevel=notice root_cmd modprobe --remove -- "${kvm_variant}" "kvm"; then
+      kvm_kernel_modules_unload_failed='false'
+    fi
+  fi
+
+  if [ "${kvm_kernel_modules_unload_failed}" = 'true' ]; then
+    log warn "Kernel modules configuration: failed to unload KVM kernel modules; reboot may be required for VirtualBox to function."
+    can_boot_virtualbox_guest_vms='false'
+    return 0
+  fi
+
+  kvm_kernel_module_reload_success='true'
+  if [ "${kvm_variant}" = 'unknown' ]; then
+    ## Try to put the variant kernel module back. It is not fatal if this fails.
+    root_cmd_loglevel=notice root_cmd modprobe -- 'kvm' || kvm_kernel_module_reload_success='false'
+  elif [ "${kvm_variant}" = 'none' ]; then
+    root_cmd_loglevel=notice root_cmd modprobe -- 'kvm' || kvm_kernel_module_reload_success='false'
+  else
+    root_cmd_loglevel=notice root_cmd modprobe -- 'kvm' "${kvm_variant}" || kvm_kernel_module_reload_success='false'
+  fi
+
+  if [ "${kvm_kernel_module_reload_success}" = 'false' ]; then
+    log warn "Kernel modules configuration: failed to reload KVM kernel modules; reboot may be required for VirtualBox and KVM to function."
+    can_boot_virtualbox_guest_vms='false'
+    return 0
+  fi
+
+  log notice "Kernel modules configuration: KVM kernel modules reloaded; VirtualBox should function."
 }
 
 
