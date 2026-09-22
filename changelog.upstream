@@ -1,3 +1,63 @@
+commit 59cae5bf3b7d93cbb66a58b16f50c2fb2735d97b
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 21 23:03:15 2026 -0400
+
+    build
+
+commit 7ccc415bb4ab54118a49833521c47c917ba2b560
+Merge: ca943ad cc8a58d
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 21 23:01:04 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit cc8a58de82e4f01d5f1bc93357d90cd1f61dd364
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 20 16:04:35 2026 -0400
+
+    Re-enable KVM enable-virt-at-load workaround in dist-installer-cli, it no longer causes VirtualBox to crash the system and is sometimes necessary
+
+commit ae9ddb892a9a4f16c806bdbe44a1d8a618f5a0a3
+Merge: ca943ad a1060be
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 20 15:52:42 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit a1060be649daee7909c8517d1246ea91085811fc
+Author: claude (dev586 e40d0109-dfab-4668-b4a9-8a492c3155d2) <noreply@anthropic.com>
+Date:   Wed Sep 16 10:00:21 2026 -0400
+
+    python3 -Bsu shebang + shell-invocation guard
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit c9e1ea024bee5d56f0e574c0ce304208a010ee16
+Author: claude (dev586 e40d0109-dfab-4668-b4a9-8a492c3155d2) <noreply@anthropic.com>
+Date:   Wed Sep 16 06:46:52 2026 -0400
+
+    Regenerate standalone: stecho/sanitize-string bare-name fallback
+
+    - Regenerated dist-installer-cli-standalone via build-dist-installer-cli after the
+      helper-scripts log_run_die fix, so the standalone no longer hard-aborts on the
+      absolute-path stecho/sanitize-string check and uses its own shim functions when
+      helper-scripts is absent (the VirtualBox-installer cowbuilder chroot case).
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 8d31bf0c0ae34da3b16cc828413c3479a4cde049
+Merge: 2f07dcb ca943ad
+Author: assisted-by-ai <assisted-by-ai@users.noreply.github.com>
+Date:   Tue Sep 15 11:07:16 2026 -0400
+
+    Merge master into ai (remaster)
+
+commit ca943ad659f60dc8a1864fab81059fe419e6244a
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Tue Sep 15 12:06:08 2026 +0000
+
+    bumped changelog version
+
 commit 5088d5615324f5e82118e7d49578dddf5d8d2f11
 Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Mon Sep 14 02:01:07 2026 -0400
