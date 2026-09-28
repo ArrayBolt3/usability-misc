@@ -25,7 +25,7 @@ if [ "${dist_build_skip_installer_dist_standalone:-}" = "true" ]; then
   exit 0
 fi
 
-## style-ok: no-has -- self-contained: runs before any helper-scripts is sourced.
+## style-ok: no-has -- self-contained.
 command -v git >/dev/null || exit 1
 
 toplevel="$(git rev-parse --show-toplevel)"
@@ -33,10 +33,8 @@ target="${toplevel}/usr/share/usability-misc/dist-installer-cli-standalone"
 template="${toplevel}/usr/bin/dist-installer-cli"
 base_name_target="${target##*/}"
 
-## Inline from HELPER_SCRIPTS_PATH (repo-wide override: empty -> installed /usr),
-## so the standalone regenerates from a source checkout -- and a drift test can
-## verify it -- without helper-scripts installed. debian/control cannot
-## Build-Depend on helper-scripts (the build chroot would then need it installed).
+## debian/control cannot Build-Depend on helper-scripts without severely
+## complicating our build setup.
 helper_path="${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/"
 
 if ! test -d "${helper_path}" ; then
@@ -89,9 +87,7 @@ extract_helper_source() {
 
 paste_helper_file() {
   local file="${1}"
-  ## Markers show the canonical install path, never the (possibly checkout-
-  ## specific) read path, so the generated file is byte-reproducible from any
-  ## helper-scripts location.
+  ## Normalize the path embedded in the built file for reproducibility.
   local display="${canonical_helper_dir}${file#"${helper_dir}"}"
 
   if [[ -n "${pasted_helper_files[${display}]+x}" ]]; then
@@ -130,9 +126,6 @@ cp -- "${template}" "${target}"
 
 tmp_target="$(mktemp "${target}.tmp.XXXXXXXXXX")"
 cleanup_handler() {
-  ## style-ok: R-120 -- self-contained: safe-rm is not guaranteed present when
-  ## this runs (a bare checkout / the build chroot before helper-scripts); this
-  ## only removes its own mktemp file.
   rm -f -- "${tmp_target}"
 }
 trap cleanup_handler EXIT
