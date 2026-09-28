@@ -5,11 +5,14 @@ set -o errexit
 set -o nounset
 set -o errtrace
 set -o pipefail
+shopt -s inherit_errexit
+shopt -s shift_verbose
+export LC_ALL=C
 
-true "$0: START"
+true "${0}: START"
 
 MYDIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" && pwd )"
-cd -- "$MYDIR"
+cd -- "${MYDIR}"
 cd -- ..
 cd -- ..
 cd -- ..
@@ -18,10 +21,11 @@ cd -- ..
 ## Building dist-installer-cli is not crucial and a workaround to skip it might unbreak the build process.
 ## https://forums.whonix.org/t/derivative-maker-missing-usr-libexec-helper-scripts-get-colors-sh/20142
 if [ "${dist_build_skip_installer_dist_standalone:-}" = "true" ]; then
-  printf '%s\n' "$0: INFO: Skipping to build dist-installer-cli because dist_build_skip_installer_dist_standalone=true, ok."
+  printf '%s\n' "${0}: INFO: Skipping to build dist-installer-cli because dist_build_skip_installer_dist_standalone=true, ok."
   exit 0
 fi
 
+## style-ok: no-has -- self-contained.
 command -v git >/dev/null || exit 1
 
 toplevel="$(git rev-parse --show-toplevel)"
@@ -29,28 +33,12 @@ target="${toplevel}/usr/share/usability-misc/dist-installer-cli-standalone"
 template="${toplevel}/usr/bin/dist-installer-cli"
 base_name_target="${target##*/}"
 
-## debian/control 'Builds-Depends: helper-scripts' is not easily possible,
-## because then the build chroot would also need helper-scripts being installed.
-# if test -d /usr/libexec/helper-scripts/ ; then
-#   ## System version.
-#   ## Stable. Or not. Depending on repository setting stable, stable-proposed-updates, testers, or developers.
-#   helper_path="/usr/libexec/helper-scripts/"
-# elif test -d "../helper-scripts/usr/libexec/helper-scripts/" ; then
-#   ## derivative-maker source code version.
-#   helper_path="../helper-scripts/usr/libexec/helper-scripts/"
-# else
-#   printf '%s\n' "$0: ERROR: helper_path neither available in
-# - /usr/libexec/helper-scripts/
-# nor in
-# ../helper-scripts/usr/libexec/helper-scripts/" >&2
-#   exit 1
-# fi
+## debian/control cannot Build-Depend on helper-scripts without severely
+## complicating our build setup.
+helper_path="${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/"
 
-## Use system version for now.
-helper_path="/usr/libexec/helper-scripts/"
-
-if ! test -d "$helper_path" ; then
-  printf '%s\n' "$0: ERROR: directory helper_path '$helper_path' does not exist!" >&2
+if ! test -d "${helper_path}" ; then
+  printf '%s\n' "${0}: ERROR: directory helper_path '${helper_path}' does not exist!" >&2
   exit 1
 fi
 
@@ -61,14 +49,14 @@ helper_dir="${helper_path%/}/"
 declare -A pasted_helper_files
 
 extract_helper_source() {
-  local line="$1"
+  local line="${1}"
   local path
   local rel
 
   ## Supported:
   ##   source /usr/libexec/helper-scripts/foo.bsh
   ##   source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/foo.bsh
-  if [[ ! "$line" =~ ^[[:space:]]*source[[:space:]]+([^[:space:];#]+) ]]; then
+  if [[ ! "${line}" =~ ^[[:space:]]*source[[:space:]]+([^[:space:];#]+) ]]; then
     return 1
   fi
 
@@ -83,14 +71,14 @@ extract_helper_source() {
   path="${path//\$HELPER_SCRIPTS_PATH/}"
 
   ## Only inline helper-scripts imports.
-  if [[ "$path" == "$canonical_helper_dir"* ]]; then
-    rel="${path#"$canonical_helper_dir"}"
+  if [[ "${path}" == "${canonical_helper_dir}"* ]]; then
+    rel="${path#"${canonical_helper_dir}"}"
     printf '%s\n' "${helper_dir}${rel}"
     return 0
   fi
 
-  if [[ "$path" == "$helper_dir"* ]]; then
-    printf '%s\n' "$path"
+  if [[ "${path}" == "${helper_dir}"* ]]; then
+    printf '%s\n' "${path}"
     return 0
   fi
 
@@ -98,49 +86,54 @@ extract_helper_source() {
 }
 
 paste_helper_file() {
-  local file="$1"
+  local file="${1}"
+  ## Normalize the path embedded in the built file for reproducibility.
+  local display="${canonical_helper_dir}${file#"${helper_dir}"}"
 
-  if [[ -n "${pasted_helper_files[$file]+x}" ]]; then
-    printf '##### SKIP duplicate source import from file %s\n' "$file"
+  if [[ -n "${pasted_helper_files[${display}]+x}" ]]; then
+    printf '##### SKIP duplicate source import from file %s\n' "${display}"
     return 0
   fi
 
-  pasted_helper_files["$file"]=1
+  pasted_helper_files["${display}"]=1
 
-  if ! test -f "$file" ; then
-    printf '%s\n' "${0##*/}: ERROR: sourced file does not exist: $file" >&2
+  if ! test -f "${file}" ; then
+    printf '%s\n' "${0##*/}: ERROR: sourced file does not exist: ${file}" >&2
     exit 1
   fi
 
-  printf '##### BEGIN pasted by %s from file %s\n' "${0##*/}" "$file"
-  process_file "$file"
-  printf '##### END pasted by %s from file %s\n' "${0##*/}" "$file"
+  printf '##### BEGIN pasted by %s from file %s\n' "${0##*/}" "${display}"
+  process_file "${file}"
+  printf '##### END pasted by %s from file %s\n' "${0##*/}" "${display}"
 }
 
 process_file() {
-  local file="$1"
+  local file="${1}"
   local line=""
   local source_file
 
-  while IFS= read -r line || test -n "$line"; do
-    if source_file="$(extract_helper_source "$line")"; then
-      paste_helper_file "$source_file"
+  while IFS= read -r line || test -n "${line}"; do
+    if source_file="$(extract_helper_source "${line}")"; then
+      paste_helper_file "${source_file}"
       continue
     fi
 
-    printf '%s\n' "$line"
-  done < "$file"
+    printf '%s\n' "${line}"
+  done < "${file}"
 }
 
 cp -- "${template}" "${target}"
 
 tmp_target="$(mktemp "${target}.tmp.XXXXXXXXXX")"
-trap 'rm -f -- "$tmp_target"' EXIT
+cleanup_handler() {
+  rm -f -- "${tmp_target}"
+}
+trap cleanup_handler EXIT
 
-process_file "$target" > "$tmp_target"
+process_file "${target}" > "${tmp_target}"
 
-chmod --reference="$target" "$tmp_target"
-mv -- "$tmp_target" "$target"
+chmod --reference="${target}" "${tmp_target}"
+mv -- "${tmp_target}" "${target}"
 
 trap - EXIT
 
@@ -156,10 +149,10 @@ sed -i \
   -- \
   "${target}"
 
-printf '%s\n' "$0: INFO: BUILD: SUCCESS"
-printf '%s\n' "$0: INFO: Running shellcheck..."
+printf '%s\n' "${0}: INFO: BUILD: SUCCESS"
+printf '%s\n' "${0}: INFO: Running shellcheck..."
 
 shellcheck "${target}"
 
-printf '%s\n' "$0: INFO: shellcheck: SUCCESS"
-printf '%s\n' "$0: INFO: END: OK"
+printf '%s\n' "${0}: INFO: shellcheck: SUCCESS"
+printf '%s\n' "${0}: INFO: END: OK"
