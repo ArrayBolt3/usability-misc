@@ -1,3 +1,73 @@
+commit 7cc0c236ccb33a03c8804216f3ddfc1d9b544adb
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Tue Sep 29 02:19:26 2026 -0400
+
+    build
+
+commit b80be9613423f11a043fc904772b7c2f4854d642
+Merge: 3e1d70c dce116b
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 28 02:42:41 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit dce116bcc0ddff737f302b13f0d4265f3a5dd4ce
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 27 21:35:19 2026 -0400
+
+    comments
+
+commit 34dc1751ed5b943d49e27ab3559e466690d297f4
+Merge: 3e1d70c 88d41aa
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 27 21:15:01 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit 88d41aafcec34d2c56a6899d0ebf6baeb10898aa
+Author: claude (dev692 9411e4ee-e940-416c-aba7-370ec7356789) <noreply@anthropic.com>
+Date:   Fri Sep 25 04:11:56 2026 -0400
+
+    opt into dist-ai CI (run dist-installer-cli-tests)
+
+    - Adds the managed consumer-dist-ai-tests wrapper + dm-consumer.yml
+      (helper-scripts: true + shellcheck) so dist-installer-cli-tests -- the
+      standalone drift guard and exit-code-propagation regression -- run in CI;
+      usability-misc had no dist-ai-tests workflow, so they never ran.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit aaa71a9d8aa096f46444166fef356d317ac90a33
+Author: claude (dev692 9411e4ee-e940-416c-aba7-370ec7356789) <noreply@anthropic.com>
+Date:   Fri Sep 25 04:11:22 2026 -0400
+
+    vbox-back-to-default-repo: propagate installer exit code
+
+    - The redundant 'ec=$?' after the 'if [ "${ec}" != 0 ]' test re-read the test's
+      own status (0), clobbering the installer code captured at run_installer, so a
+      non-108 failure exited 0 instead of the installer's code (exit_code_propagation_test).
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit d1e5d1142e4ccbc7d8b7aad75f149460f49a5990
+Author: claude (dev692 9411e4ee-e940-416c-aba7-370ec7356789) <noreply@anthropic.com>
+Date:   Fri Sep 25 04:10:30 2026 -0400
+
+    regenerate dist-installer-cli-standalone from pinned helper-scripts
+
+    - build-dist-installer-cli now reads HELPER_SCRIPTS_PATH and emits canonical
+      /usr/libexec markers, so the standalone is byte-reproducible from any checkout.
+    - standalone resynced to the pinned helper-scripts: carries the get_os VERSION_ID
+      quote-strip fix plus the drifted is_integer/is_whole_number_int64/locale updates.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 3e1d70c366d391e84eab3d55285dc1476ae24f15
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Tue Sep 22 03:14:10 2026 +0000
+
+    bumped changelog version
+
 commit 59cae5bf3b7d93cbb66a58b16f50c2fb2735d97b
 Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Mon Sep 21 23:03:15 2026 -0400
