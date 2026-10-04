@@ -87,7 +87,10 @@ declare version me start_time dialog_title license adrelanos_signify \
 ## https://raw.githubusercontent.com/Kicksecure/helper-scripts/refs/heads/master/usr/libexec/helper-scripts/wc-test.sh
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/check_runtime.bsh
-source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh
+if ! source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh ; then
+  printf '%s\n' "$0: ERROR: cannot source check_runtime.bsh!" >&2
+  exit 1
+fi
 
 if was_executed "${BASH_SOURCE[0]}"; then
   ## Script was executed.
