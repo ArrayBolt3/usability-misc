@@ -14,7 +14,7 @@ declare version me start_time dialog_title license adrelanos_signify \
   non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
-  url_version_domain run_background background_pid  \
+  url_version_domain run_background background_pid logging_pids \
   debian_derivative_detected ubuntu_derivative_detected \
   kali_derivative_detected fedora_derivative_detected \
   virtualbox_linux_user_group qubes_template_detected \
@@ -475,6 +475,21 @@ source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/log_run_die.sh
 end_exit() {
   ## Reset traps.
   trap - ERR EXIT HUP INT QUIT ABRT ALRM TERM
+
+  ## Release the concurrency lock promptly. The logging 'tee' children inherited
+  ## the top-of-file 'flock' lock fd (file descriptors pass to children and the fd
+  ## is not close-on-exec), so they would keep the lock held after this process
+  ## exits until they drain and die -- wrongly refusing a back-to-back run. Stop
+  ## xtrace, detach them from our stdout/stderr and the FIFO so they reach EOF,
+  ## then WAIT for exactly these PIDs (never a backgrounded VBox GUI) so none holds
+  ## the lock when this process (and its 'flock' parent) exits.
+  set +o xtrace 2>/dev/null || true
+  exec 9>&- 2>/dev/null || true
+  exec 1>/dev/null 2>/dev/null || true
+  if [ "${#logging_pids[@]}" -gt 0 ]; then
+    wait "${logging_pids[@]}" 2>/dev/null || true
+  fi
+
   ## Kill tail PID.
   if [ -n "${tail_pid:-}" ]; then
     ## Sleep less than a second so the file descriptors have enough time to
@@ -4235,6 +4250,9 @@ set_default() {
   url_version_domain=""
   run_background=""
   background_pid=""
+  ## PIDs of the logging 'tee' children; end_exit reaps exactly these so they do
+  ## not keep the inherited concurrency-lock fd held after this process exits.
+  logging_pids=()
   debian_derivative_detected=""
   ubuntu_derivative_detected=""
   kali_derivative_detected=""
@@ -4694,8 +4712,14 @@ log_term_and_file() {
   true "\
   exec > >(run_as_target_user tee -a -- \"${log_file_user}\") \
       2> >(run_as_target_user tee -a \"${log_file_debug}\" >&2)"
-  exec > >(run_as_target_user tee -a -- "${log_file_user}") \
-      2> >(run_as_target_user tee -a -- "${log_file_debug}" >&2)
+  ## Split so each 'tee' process substitution's PID is captured (bash sets $! for
+  ## a process substitution). These children inherit the top-of-file 'flock' lock
+  ## fd, so end_exit must reap exactly these (not e.g. a backgrounded VBox GUI)
+  ## before exiting, or the lock lingers and a back-to-back run is wrongly refused.
+  exec > >(run_as_target_user tee -a -- "${log_file_user}")
+  logging_pids+=( "$!" )
+  exec 2> >(run_as_target_user tee -a -- "${log_file_debug}" >&2)
+  logging_pids+=( "$!" )
 
   temp_folder="$(mktemp --directory)"
   xtrace_fifo="${temp_folder}/xtrace_fifo"
@@ -4709,8 +4733,8 @@ log_term_and_file() {
     run_as_target_user tee -a -- "${log_file_debug}" < "${xtrace_fifo}" > /dev/null &
   fi
 
-  ## Automatically exists at the end of this script.
-  #xtrace_pid="$!"
+  ## Track the xtrace tee too; it also inherits the lock fd via the FIFO.
+  logging_pids+=( "$!" )
 
   exec 9> "${xtrace_fifo}"
   export BASH_XTRACEFD=9
