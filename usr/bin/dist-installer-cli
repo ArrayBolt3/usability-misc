@@ -14,7 +14,7 @@ declare version me start_time dialog_title license adrelanos_signify \
   non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
-  url_version_domain run_background background_pid logging_pids \
+  url_version_domain run_background background_pid dic_lock_fd \
   debian_derivative_detected ubuntu_derivative_detected \
   kali_derivative_detected fedora_derivative_detected \
   virtualbox_linux_user_group qubes_template_detected \
@@ -115,19 +115,12 @@ if was_executed "${BASH_SOURCE[0]}"; then
   SKIP_UNIT_TESTS=true
 fi
 
-if was_executed "${BASH_SOURCE[0]}"; then
-  ## Concurrency guard: at most one dist-installer-cli run per user at a time.
-  ## Concurrent runs otherwise collide on the shared download directory and on
-  ## the system-wide apt / modprobe / repository setup. lockfile.sh self-locks by
-  ## re-exec under 'flock' and fails fast (non-zero, 'flock: failed to get lock')
-  ## when another run already holds the lock. A fixed LOCK_NAME makes every
-  ## invocation name share ONE lock: the installed path, the generated standalone,
-  ## and the 'virtualbox-installer-cli' symlink. Guarded by was_executed so that
-  ## sourcing this script (dist-ai tests) never self-locks or re-execs.
-  export LOCK_NAME="dist-installer-cli"
-  # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/lockfile.sh
-  source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/lockfile.sh
-fi
+## Concurrency guard: at most one dist-installer-cli run per user at a time, to
+## stop concurrent runs colliding on the shared download directory and the
+## system-wide apt / modprobe / repository setup. NOT a top-of-file self-lock: the
+## lock is acquired in run_installer AFTER logging is set up and released before
+## the guest boots (acquire_concurrency_lock / release_concurrency_lock), so no
+## logging 'tee' or backgrounded VirtualBox GUI inherits (and pins) the lock fd.
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
 source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/has.bsh
@@ -471,24 +464,55 @@ source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/parse_opt.sh
 source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/log_run_die.sh
 
 
+## Acquire the per-user concurrency guard. Called from run_installer AFTER logging
+## is set up -- so the logging 'tee' children never inherit the lock fd -- and
+## released (release_concurrency_lock) before the guest boots and in end_exit, so
+## no logging child or backgrounded VirtualBox GUI keeps the lock held. The lock is
+## held on a bash auto-assigned fd for this process; a second concurrent run fails
+## fast. Scope is per-user: the lock dir is the caller's runtime dir, or the
+## per-user cache dir when there is no logind session (headless / container /
+## 'sudo -u'); both are owned by the user and not world-writable, which is the
+## anti-TOCTOU property (a shared world-writable dir like /tmp is never used).
+acquire_concurrency_lock() {
+  local lock_dir lock_file
+  ## Dry-run mutates nothing, so it neither takes nor waits on the lock.
+  if [ "${dry_run_skip_commands}" = "1" ]; then
+    return 0
+  fi
+  lock_dir="${XDG_RUNTIME_DIR:-/run/user/$(id --user)}"
+  if [ ! -d "${lock_dir}" ] || [ -L "${lock_dir}" ] || [ ! -O "${lock_dir}" ]; then
+    lock_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}"
+    mkdir --parents -- "${lock_dir}" 2>/dev/null || true
+  fi
+  if [ ! -d "${lock_dir}" ] || [ -L "${lock_dir}" ] || [ ! -O "${lock_dir}" ]; then
+    die 1 "${underline}Concurrency lock:${nounderline} no usable per-user lock directory ('${lock_dir}' must be a directory you own and not a symlink)."
+  fi
+  lock_file="${lock_dir}/dist-installer-cli.lock"
+  exec {dic_lock_fd}>"${lock_file}" || \
+    die 1 "${underline}Concurrency lock:${nounderline} cannot open lock file '${lock_file}'."
+  if ! flock --exclusive --nonblock "${dic_lock_fd}"; then
+    die 1 "${underline}Concurrency lock:${nounderline} another '${me}' run is already in progress (lock '${lock_file}' is held). Wait for it to finish, then retry."
+  fi
+}
+
+## Release the concurrency lock by closing its fd (frees the flock). Idempotent.
+release_concurrency_lock() {
+  if [ -z "${dic_lock_fd:-}" ]; then
+    return 0
+  fi
+  exec {dic_lock_fd}>&- 2>/dev/null || true
+  dic_lock_fd=""
+}
+
 ## Wrapper to end the exit trap.
 end_exit() {
   ## Reset traps.
   trap - ERR EXIT HUP INT QUIT ABRT ALRM TERM
 
-  ## Release the concurrency lock promptly. The logging 'tee' children inherited
-  ## the top-of-file 'flock' lock fd (file descriptors pass to children and the fd
-  ## is not close-on-exec), so they would keep the lock held after this process
-  ## exits until they drain and die -- wrongly refusing a back-to-back run. Stop
-  ## xtrace, detach them from our stdout/stderr and the FIFO so they reach EOF,
-  ## then WAIT for exactly these PIDs (never a backgrounded VBox GUI) so none holds
-  ## the lock when this process (and its 'flock' parent) exits.
-  set +o xtrace 2>/dev/null || true
-  exec 9>&- 2>/dev/null || true
-  exec 1>/dev/null 2>/dev/null || true
-  if [ "${#logging_pids[@]}" -gt 0 ]; then
-    wait "${logging_pids[@]}" 2>/dev/null || true
-  fi
+  ## Release the concurrency lock (close its fd) as a safety net, in case we exit
+  ## before the explicit release in main(). Closing the held fd frees the lock when
+  ## this process exits.
+  release_concurrency_lock
 
   ## Kill tail PID.
   if [ -n "${tail_pid:-}" ]; then
@@ -4136,6 +4160,11 @@ main() {
   vm_delete_maybe
   check_vm_exists_general "(check before import)"
   import_guest
+  ## Release the concurrency lock before booting: the shared/privileged work
+  ## (download, apt/modprobe, import) is done, and a detached VirtualBox GUI started
+  ## by check_guest_boot would otherwise inherit the lock fd and pin it for the VM's
+  ## lifetime.
+  release_concurrency_lock
   check_guest_boot
   ########################################
   ## END VERIFICATION, IMPORT AND START ##
@@ -4250,9 +4279,8 @@ set_default() {
   url_version_domain=""
   run_background=""
   background_pid=""
-  ## PIDs of the logging 'tee' children; end_exit reaps exactly these so they do
-  ## not keep the inherited concurrency-lock fd held after this process exits.
-  logging_pids=()
+  ## fd holding the concurrency lock (empty = not held); see acquire/release.
+  dic_lock_fd=""
   debian_derivative_detected=""
   ubuntu_derivative_detected=""
   kali_derivative_detected=""
@@ -4712,14 +4740,8 @@ log_term_and_file() {
   true "\
   exec > >(run_as_target_user tee -a -- \"${log_file_user}\") \
       2> >(run_as_target_user tee -a \"${log_file_debug}\" >&2)"
-  ## Split so each 'tee' process substitution's PID is captured (bash sets $! for
-  ## a process substitution). These children inherit the top-of-file 'flock' lock
-  ## fd, so end_exit must reap exactly these (not e.g. a backgrounded VBox GUI)
-  ## before exiting, or the lock lingers and a back-to-back run is wrongly refused.
-  exec > >(run_as_target_user tee -a -- "${log_file_user}")
-  logging_pids+=( "$!" )
-  exec 2> >(run_as_target_user tee -a -- "${log_file_debug}" >&2)
-  logging_pids+=( "$!" )
+  exec > >(run_as_target_user tee -a -- "${log_file_user}") \
+      2> >(run_as_target_user tee -a -- "${log_file_debug}" >&2)
 
   temp_folder="$(mktemp --directory)"
   xtrace_fifo="${temp_folder}/xtrace_fifo"
@@ -4733,8 +4755,8 @@ log_term_and_file() {
     run_as_target_user tee -a -- "${log_file_debug}" < "${xtrace_fifo}" > /dev/null &
   fi
 
-  ## Track the xtrace tee too; it also inherits the lock fd via the FIFO.
-  logging_pids+=( "$!" )
+  ## Automatically exists at the end of this script.
+  #xtrace_pid="$!"
 
   exec 9> "${xtrace_fifo}"
   export BASH_XTRACEFD=9
@@ -4779,6 +4801,9 @@ run_installer() {
   parse_opt "${@}"
   ## Logging mechanism.
   log_term_and_file
+  ## Concurrency guard: acquire AFTER logging is set up (so the logging 'tee'
+  ## children never inherit the lock fd), before any shared/privileged work.
+  acquire_concurrency_lock
   welcome
   test_run_as_target_user
 
