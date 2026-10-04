@@ -86,8 +86,14 @@ declare version me start_time dialog_title license adrelanos_signify \
 ## Other links to raw versins you can easily infer. For example:
 ## https://raw.githubusercontent.com/Kicksecure/helper-scripts/refs/heads/master/usr/libexec/helper-scripts/wc-test.sh
 
+## Source check_runtime.bsh on its OWN leading 'source' line so the standalone
+## generator (build-dist-installer-cli) INLINES it -- an 'if ! source' guard is not
+## inlinable and would leave the self-contained standalone still depending on
+## helper-scripts at runtime. The missing-file guard moves to a post-source check of
+## was_executed (defined by check_runtime.bsh).
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/check_runtime.bsh
-if ! source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh ; then
+source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh 2>/dev/null || true
+if ! declare -F was_executed >/dev/null; then
   printf '%s\n' "$0: ERROR: cannot source check_runtime.bsh!" >&2
   exit 1
 fi
