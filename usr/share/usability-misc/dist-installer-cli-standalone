@@ -94,52 +94,10 @@ declare version me start_time dialog_title license adrelanos_signify \
 ## https://raw.githubusercontent.com/Kicksecure/helper-scripts/refs/heads/master/usr/libexec/helper-scripts/wc-test.sh
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/check_runtime.bsh
-##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/check_runtime.bsh
-#!/bin/bash
-
-## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
-## See the file COPYING for copying conditions.
-
-## WARNING: Do NOT attempt to calculate the runtime once and store the result
-## in a global variable. If an executable sources this library and another
-## library sourced by the same executable sources this library again, the
-## variable will get overwritten by the second sourcing and cause breakage.
-##
-## WARNING 2: Do NOT use BASH_SOURCE in this script. It will always evaluate
-## to /usr/libexec/helper-scripts/check_runtime.bsh regardless of where the
-## functions are executed. The caller MUST pass BASH_SOURCE themselves.
-
-## Some functions are duplicated in:
-## - genmkfile/usr/share/genmkfile/make-helper-one.bsh
-## - helper-scripts/usr/libexec/helper-scripts/strings.bsh
-
-was_executed() {
-  local caller_bash_source_zero="${1}"
-  if [[ "${caller_bash_source_zero}" == "${0}" ]] \
-    || [[ "${caller_bash_source_zero}" == "$(command -v "${0}")" ]]; then
-    return 0
-  fi
-  return 1
-}
-
-was_sourced() {
-  local caller_bash_source_zero="${1}"
-  if [[ "${caller_bash_source_zero}" != "${0}" ]] \
-    && [[ "${caller_bash_source_zero}" != "$(command -v "${0}")" ]]; then
-    return 0
-  fi
-  return 1
-}
-
-should_run_unit_tests() {
-  local caller_bash_source_zero="${1}"
-  if was_executed "${caller_bash_source_zero}" \
-    && ! [ "${SKIP_UNIT_TESTS-}" = 'true' ]; then
-    return 0
-  fi
-  return 1
-}
-##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/check_runtime.bsh
+if ! source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh ; then
+  printf '%s\n' "$0: ERROR: cannot source check_runtime.bsh!" >&2
+  exit 1
+fi
 
 if was_executed "${BASH_SOURCE[0]}"; then
   ## Script was executed.
@@ -149,8 +107,150 @@ if was_executed "${BASH_SOURCE[0]}"; then
   set -o pipefail
   shopt -s inherit_errexit
   shopt -s shift_verbose
+  ## Deterministic C locale: external command output is grepped throughout and
+  ## range-based input validation (is_whole_number and friends) matches ASCII only
+  ## under C -- a UTF-8 locale can make '[0-9]'/'[A-Za-z]' match unexpectedly.
+  ## vboxmanage keeps its own 'LC_ALL=C.UTF-8' override where UTF-8 is needed.
+  export LC_ALL=C
   ## Skip 'strings.bsh' unit tests.
   SKIP_UNIT_TESTS=true
+fi
+
+if was_executed "${BASH_SOURCE[0]}"; then
+  ## Concurrency guard: at most one dist-installer-cli run per user at a time.
+  ## Concurrent runs otherwise collide on the shared download directory and on
+  ## the system-wide apt / modprobe / repository setup. lockfile.sh self-locks by
+  ## re-exec under 'flock' and fails fast (non-zero, 'flock: failed to get lock')
+  ## when another run already holds the lock. A fixed LOCK_NAME makes every
+  ## invocation name share ONE lock: the installed path, the generated standalone,
+  ## and the 'virtualbox-installer-cli' symlink. Guarded by was_executed so that
+  ## sourcing this script (dist-ai tests) never self-locks or re-execs.
+  export LOCK_NAME="dist-installer-cli"
+  # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/lockfile.sh
+##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/lockfile.sh
+#!/bin/bash
+
+## Copyright (C) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+## See the file COPYING for copying conditions.
+
+## Lock file mechanism to prevent duplicate script instances per user
+##
+## Two ways to use it:
+##   * Source it to self-lock the sourcing script. Only one instance of the
+##     script will be able to run at a time.
+##   * Execute it as  'lockfile.sh <lock-key> -- <command> [args...]'  to run the
+##     command under a per-key lock (skipping, non-zero, if the key is already
+##     held).
+
+## Based on flock man page.
+## > [ "${FLOCKER}" != "${0}" ] && exec env FLOCKER="${0}" flock -en "${0}" "${0}" "$@" || :
+
+## style-ok: no-strict -- sourced helper.
+
+## style-ok: allow-exec -- process handoff is used here intentionally.
+
+true "${BASH_SOURCE[0]}: START"
+
+true "${BASH_SOURCE[0]}: INFO: FLOCKER: ${FLOCKER-}"
+
+## No fallback outside of /run/user/EUID by design. A fallback such as /tmp or
+## a 1777 root:root dir under /run would introduce TOCTOU issues.
+flocker_runtime_dir="${XDG_RUNTIME_DIR:-/run/user/${EUID}}"
+if [ -d "${flocker_runtime_dir}" ] && [ ! -L "${flocker_runtime_dir}" ]; then
+  flocker_temp_folder="${flocker_runtime_dir}/flocker-temp-folder"
+else
+  printf '%s\n' "$0: ERROR: no per-user runtime dir, cannot create a lock directory!" 1>&2
+  exit 1
+fi
+mkdir --parents -- "${flocker_temp_folder}"
+if [ -L "${flocker_temp_folder}" ]; then
+  printf '%s\n' "$0: ERROR: refusing unexpected symlink at lock directory location '${flocker_temp_folder}'!" 1>&2
+  exit 1
+fi
+
+## Wrap-mode setup: an EXECUTED run of THIS file with arguments treats $1 as the
+## lock key and runs the rest as a command under that key's lock (the run happens
+## on the locked pass, below). Three conditions must all hold so that wrap mode
+## does NOT mis-fire for:
+##   - a SOURCED use (BASH_SOURCE[0] != $0), the historical self-lock, or
+##   - an INLINED copy of this body pasted into another executed script (e.g. the
+##     dist-installer-cli standalone generator). An inlined host runs this at the
+##     host's own top level, where BASH_SOURCE[0] == $0, so the basename check is
+##     what keeps wrap mode off: BASH_SOURCE[0] is then the HOST's path, whose
+##     basename is not 'lockfile.sh', and the host keeps the self-lock behaviour.
+lockfile_wrap="no"
+if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "${BASH_SOURCE[0]##*/}" = "lockfile.sh" ] && [ "${#}" -ge 1 ]; then
+  lockfile_wrap="yes"
+  LOCK_NAME="${1}"
+fi
+
+## The lock key defaults to this script's own path. A caller that runs the same
+## script concurrently for different keys can set LOCK_NAME to lock per key
+## instead.
+if [ -n "${LOCK_NAME-}" ]; then
+  flocker_key="${LOCK_NAME}"
+else
+  flocker_key="$(realpath -- "${0}")"
+fi
+
+flocker_path_substituted="${flocker_key//_/_underscore_}"
+flocker_path_substituted="${flocker_path_substituted//\//_slash_}"
+flocker_path_substituted="${flocker_path_substituted//./_dot_}"
+flocker_lockfile="${flocker_temp_folder}/${flocker_path_substituted}"
+
+if ! test -f "${flocker_lockfile}"; then
+  touch -- "${flocker_lockfile}"
+fi
+
+if [ "${FLOCKER-}" != "${0}" ]; then
+  true "${BASH_SOURCE[0]}: INFO: FLOCKER set to self: no"
+
+  ## Using 'flock' with option '--verbose' but hiding stdout for the purpose of showing
+  ## 'flock: failed to get lock' error message, if applicable.
+  ## The error message is not perfectly atomic.
+  flock --verbose --exclusive --nonblock "${flocker_lockfile}" /usr/bin/true >/dev/null
+  ## But if we were to use '--verbose' below, then 'flock' would always add verbose
+  ## output even in case it was possible to acquire a lock.
+
+  if test -o xtrace; then
+    ## Code duplication. Also in xtrace.bsh function shellopts_with_xtrace.
+    ## This helper intentionally avoids sourcing dependencies.
+    ## TODO: Do we need to avoid sourcing dependencies?
+    case ":${SHELLOPTS-}:" in
+      *:xtrace:*)
+        flocker_shellopts="${SHELLOPTS-}"
+        ;;
+      *)
+        flocker_shellopts="${SHELLOPTS-}:xtrace"
+        ;;
+    esac
+    exec env SHELLOPTS="${flocker_shellopts}" FLOCKER="${0}" flock --exclusive --nonblock "${flocker_lockfile}" "${0}" "${@}"
+  else
+    exec env FLOCKER="${0}" flock --exclusive --nonblock "${flocker_lockfile}" "${0}" "${@}"
+  fi
+  ## Never reached due to 'exec' above.
+fi
+
+## If we get this far, we're in wrap mode. The above code will have re-executed
+## this script with the lock held, so now we just need to hand off to the
+## target command.
+if [ "${lockfile_wrap}" = "yes" ]; then
+  shift # Get rid of the lock key name
+  if [ "${#}" -ge 1 ] && [ "${1}" = "--" ]; then
+    shift # We support end-of-options even though we don't have any options
+  fi
+  if [ "${#}" -lt 1 ]; then
+    printf '%s\n' "${0}: ERROR: usage: ${0} <lock-key> -- <command> [args...]" 1>&2
+    exit 2
+  fi
+  unset LOCK_NAME FLOCKER
+  exec -- "${@}"
+fi
+
+true "${BASH_SOURCE[0]}: INFO: FLOCKER set to self: yes"
+
+true "${BASH_SOURCE[0]}: END"
+##### END pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/lockfile.sh
 fi
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
@@ -906,7 +1006,10 @@ fi
 ## style-ok: no-strict - sourced library.
 
 # shellcheck source=./check_runtime.bsh
-##### SKIP duplicate source import from file /usr/libexec/helper-scripts/check_runtime.bsh
+if ! source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh ; then
+  printf '%s\n' "$0: ERROR: cannot source check_runtime.bsh!" >&2
+  exit 1
+fi
 
 # shellcheck disable=SC2034
 get_colors() {
@@ -1124,6 +1227,13 @@ fi
 ## NOTE: Must not include bashisms!
 
 ## NOTE: code duplication: Function pkg_installed is duplicated elsewhere in derivative-maker source code.
+
+## Contract: tests the dpkg WANT flag (field 1 of '${Status}', the requested
+## selection), NOT the actual install state (field 3). Consequences:
+##  - want 'install' returns 0 even when the state is half-installed / unpacked /
+##    config-files (present per policy, but not necessarily usable).
+##  - a held-but-installed package (want 'hold') returns 1 although it is installed.
+## Callers needing "usable right now" must inspect the state field themselves.
 pkg_installed() {
    ## 'local' does not break 'sh'.
    local package_name dpkg_query_output
@@ -3959,7 +4069,7 @@ options kvm enable_virt_at_load=0" \
   if kernel_module_loaded_check "kvm"; then
     kvm_kernel_module_found='true'
     log info "Kernel modules configuration: KVM main module active: 'kvm'."
-    if [ "$kvm_variant" = "unknown" ]; then
+    if [ "${kvm_variant}" = "unknown" ]; then
       ## KVM hot unload will almost certainly fail if we can't detect the KVM
       ## variant, as the core KVM module requires a helper module for the
       ## specific CPU architecture. Warn, but try to unload anyway.
@@ -3968,7 +4078,7 @@ options kvm enable_virt_at_load=0" \
     fi
   fi
 
-  if ! [ "$kvm_kernel_module_found" = 'true' ]; then
+  if ! [ "${kvm_kernel_module_found}" = 'true' ]; then
     log notice "Kernel modules configuration: no KVM kernel modules loaded (OK)."
     return 0
   fi

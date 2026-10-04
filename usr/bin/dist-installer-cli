@@ -100,8 +100,27 @@ if was_executed "${BASH_SOURCE[0]}"; then
   set -o pipefail
   shopt -s inherit_errexit
   shopt -s shift_verbose
+  ## Deterministic C locale: external command output is grepped throughout and
+  ## range-based input validation (is_whole_number and friends) matches ASCII only
+  ## under C -- a UTF-8 locale can make '[0-9]'/'[A-Za-z]' match unexpectedly.
+  ## vboxmanage keeps its own 'LC_ALL=C.UTF-8' override where UTF-8 is needed.
+  export LC_ALL=C
   ## Skip 'strings.bsh' unit tests.
   SKIP_UNIT_TESTS=true
+fi
+
+if was_executed "${BASH_SOURCE[0]}"; then
+  ## Concurrency guard: at most one dist-installer-cli run per user at a time.
+  ## Concurrent runs otherwise collide on the shared download directory and on
+  ## the system-wide apt / modprobe / repository setup. lockfile.sh self-locks by
+  ## re-exec under 'flock' and fails fast (non-zero, 'flock: failed to get lock')
+  ## when another run already holds the lock. A fixed LOCK_NAME makes every
+  ## invocation name share ONE lock: the installed path, the generated standalone,
+  ## and the 'virtualbox-installer-cli' symlink. Guarded by was_executed so that
+  ## sourcing this script (dist-ai tests) never self-locks or re-execs.
+  export LOCK_NAME="dist-installer-cli"
+  # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/lockfile.sh
+  source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/lockfile.sh
 fi
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
@@ -1774,7 +1793,7 @@ options kvm enable_virt_at_load=0" \
   if kernel_module_loaded_check "kvm"; then
     kvm_kernel_module_found='true'
     log info "Kernel modules configuration: KVM main module active: 'kvm'."
-    if [ "$kvm_variant" = "unknown" ]; then
+    if [ "${kvm_variant}" = "unknown" ]; then
       ## KVM hot unload will almost certainly fail if we can't detect the KVM
       ## variant, as the core KVM module requires a helper module for the
       ## specific CPU architecture. Warn, but try to unload anyway.
@@ -1783,7 +1802,7 @@ options kvm enable_virt_at_load=0" \
     fi
   fi
 
-  if ! [ "$kvm_kernel_module_found" = 'true' ]; then
+  if ! [ "${kvm_kernel_module_found}" = 'true' ]; then
     log notice "Kernel modules configuration: no KVM kernel modules loaded (OK)."
     return 0
   fi
