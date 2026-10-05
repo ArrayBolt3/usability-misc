@@ -2760,7 +2760,7 @@ end_exit() {
 
 ## Handle exit trap with line it failed and its exit code.
 handle_exit() {
-  local line_number line_above line_error line_below signal_code signal_caught
+  local line_number signal_code signal_caught
   true "BEGIN handle_exit() with args: $*"
   last_exit="${1}"
   line_number="${2:-0}"
@@ -2787,16 +2787,13 @@ handle_exit() {
     log error "Please report this bug if it has not been already."
     printf '%s\n' ""
     log error "An error occurred at line: '${line_number}'"
-    ## ideas from https://unix.stackexchange.com/questions/39623/trap-err-and-echoing-the-error-line
-    ## Simple version that doesn't indicate the error line.
-    # pr -tn "${0}" | tail -n+$((line_number - 3)) | head -n3
-    ## Easy version for wasting resources and better readability.
-    line_above="$(pr -tn "${0}" | tail -n+$((line_number - 4)) | head -n4)"
-    line_error="$(pr -tn "${0}" | tail -n+$((line_number)) | head -n1)"
-    line_below="$(pr -tn "${0}" | tail -n+$((line_number + 1)) | head -n4)"
-    printf '%s\n*%s\n%s\n' "${line_above}" "${line_error}" "${line_below}"
-    ## Too complex.
-    # awk 'NR>L-4 && NR<L+4 { printf " %-5d%3s %s\n",NR,(NR==L?">>>":""),$0 }' L="${line_number}" "${0}" >&2
+    ## Print the error line and a few lines of context, marking the error line
+    ## with '*'. 'awk' reads "${0}" directly (no 'pr | tail | head' pipeline), so
+    ## it cannot take a SIGPIPE when the reader closes early, and it has no
+    ## negative-offset problem when 'line_number' is near the top of the file.
+    awk -v line="${line_number}" 'NR >= line - 4 && NR <= line + 4 {
+      printf "%s%d: %s\n", (NR == line ? "*" : " "), NR, $0
+    }' "${0}" || true
     printf '%s\n' ""
     log error "Please include the user log and the debug log in your bug report."
     log error "(For file locations where to find these logs, see above.)"
@@ -3365,16 +3362,20 @@ check_vm_registered_virtualbox() {
   local extra_message
   extra_message="$1"
 
+  ## 'showvminfo' is a read-only DETECTION query whose EXIT STATUS answers
+  ## "does this VM exist". It must run even under '--dry-run' (dry_run_skip_commands=0):
+  ## if skipped, log_run returns 0 and every VM would falsely look "existing". The
+  ## side-effecting delete/import below stay skipped under dry-run as usual.
   case "${guest}" in
     whonix)
       ## Test if machine exists.
       workstation_exists=0
       gateway_exists=0
-      if run_as_target_user "${vboxmanage_locale_english[@]}" showvminfo "${guest_full_vm_name_gateway}" >/dev/null 2>&1 ; then
+      if dry_run_skip_commands=0 run_as_target_user "${vboxmanage_locale_english[@]}" showvminfo "${guest_full_vm_name_gateway}" >/dev/null 2>&1 ; then
         gateway_exists=1
         log info "Existing VM Check Result ${extra_message}: guest '${guest_full_vm_name_gateway}' exists."
       fi
-      if run_as_target_user "${vboxmanage_locale_english[@]}" showvminfo "${guest_full_vm_name_workstation}" >/dev/null 2>&1 ; then
+      if dry_run_skip_commands=0 run_as_target_user "${vboxmanage_locale_english[@]}" showvminfo "${guest_full_vm_name_workstation}" >/dev/null 2>&1 ; then
         workstation_exists=1
         log info "Existing VM Check Result ${extra_message}: guest '${guest_full_vm_name_workstation}' exists."
       fi
@@ -3399,7 +3400,7 @@ check_vm_registered_virtualbox() {
       ;;
     kicksecure)
       vm_or_vms_already_existing_test_result=false
-      if ! run_as_target_user "${vboxmanage_locale_english[@]}" showvminfo "${guest_full_vm_name_kicksecure}" >/dev/null 2>&1 ; then
+      if ! dry_run_skip_commands=0 run_as_target_user "${vboxmanage_locale_english[@]}" showvminfo "${guest_full_vm_name_kicksecure}" >/dev/null 2>&1 ; then
         log info "Existing VM Check Result ${extra_message}: None existing yet, ok."
         return 0
       fi
@@ -3578,7 +3579,12 @@ check_guest_boot() {
       ;;
   esac
 
-  if [ "${kernel_module_has_been_loaded}" = "false" ]; then
+  if [ "${dry_run_skip_commands}" = "1" ]; then
+    ## Under '--dry-run' nothing was really installed and the module-state probes
+    ## (modprobe / cat /proc/sys/kernel/modules_disabled) were skipped, so the
+    ## "can we start the VMs" readiness gate does not apply -- do not abort on it.
+    log notice "${underline}VirtualBox Startup Check:${nounderline} Skipped kernel-module readiness check (dry-run)."
+  elif [ "${kernel_module_has_been_loaded}" = "false" ]; then
     ## Kernel modules have not been loaded.
     user_warned_potential_startup_issue=true
     log warn "Debugging information:
@@ -5053,9 +5059,28 @@ virtualbox_installation_failure_debug() {
 }
 
 
+## True (and logs) under '--dry-run': the per-OS VirtualBox install -- adding the
+## Oracle repository, detecting the published package version, apt-get/dnf install
+## -- cannot be simulated once its commands are skipped (the repo is never added,
+## so a version query returns nothing). Callers return early. The common host
+## packages (install_package_*_common) still run so later steps see an initialized
+## 'pkg_mngr_check_installed'; only the VirtualBox install itself is skipped.
+## Scope: a dry-run reports "would install VirtualBox"; it deliberately does NOT
+## run the install's own pre-checks (e.g. the unowned-tarball vboxmanage conflict
+## that would exit 109 in a real run), so a SUCCESS here means the simulated flow
+## completed, not that a real install would succeed on this exact host.
+virtualbox_install_skipped_under_dry_run() {
+  [ "${dry_run_skip_commands}" = "1" ] || return 1
+  log notice "${hypervisor_pretty} Installation: Skipped (dry-run) -- VirtualBox and its Oracle repository would be installed here."
+  return 0
+}
+
+
 ## Install VirtualBox on Fedora
 install_virtualbox_fedora() {
   local has_virtualbox_qt
+
+  virtualbox_install_skipped_under_dry_run && return 0
 
   install_pkg kernel-headers kernel-devel dkms
 
@@ -5183,6 +5208,8 @@ install_virtualbox_debian_common_begin() {
 install_virtualbox_debian() {
   local linux_image linux_headers install_virtualbox_args
 
+  virtualbox_install_skipped_under_dry_run && return 0
+
   linux_image="linux-image-$(dpkg --print-architecture)"
   linux_headers="linux-headers-$(dpkg --print-architecture)"
   ## Doing here and now below because we $install_pkg_fasttrack_extra_args_maybe should not be used here.
@@ -5205,6 +5232,8 @@ install_virtualbox_debian() {
 ## Install VirtualBox on Ubuntu
 install_virtualbox_ubuntu() {
   local install_virtualbox_args
+
+  virtualbox_install_skipped_under_dry_run && return 0
 
   install_virtualbox_debian_common_begin
 
@@ -5403,6 +5432,21 @@ get_transfer_cmd() {
 handle_exit_trap() {
   local exit_code=$?
 
+  ## Disarm all traps before handling the exit so a failure INSIDE the handler
+  ## (e.g. a SIGPIPE in the diagnostics) cannot re-enter it and mask the real
+  ## exit code. 'handle_exit' is only ever reached through this trap.
+  trap - ERR EXIT HUP INT QUIT ABRT ALRM TERM
+
+  ## Make the handler immune to a closed output reader (e.g. piping the installer
+  ## to 'head' or quitting a pager): ignore SIGPIPE and stop errexit aborting on
+  ## the resulting EPIPE write, so the handler still reports the REAL exit code
+  ## and runs end_exit cleanup (lock release, temp removal) instead of dying 141
+  ## with the lock still held.
+  trap '' PIPE
+  ## style-ok: R-011 -- a terminal error handler must not abort on its own EPIPE
+  ## writes; this is not the rc-capture errexit toggle R-011 targets.
+  set +o errexit
+
   handle_exit "${exit_code}" "${BASH_LINENO[0]:-0}"
 }
 
@@ -5521,7 +5565,11 @@ Running this installer in Live Mode will usually not work unless the system has 
     live_status_extra_message=""
   fi
 
-  if [ "${free_space_available}" -lt "${free_space_required}" ]; then
+  ## Under '--dry-run' the 'df' above is skipped (no command runs), so
+  ## 'free_space_available' is empty -- skip the comparison; a simulation
+  ## downloads nothing, so the disk-space constraint does not apply.
+  if [ "${dry_run_skip_commands}" != "1" ] \
+    && [ "${free_space_available}" -lt "${free_space_required}" ]; then
     die 101 "\
 ${underline}Free Disk Space Check Result:${nounderline} 'FAIL.' - Insufficient free disk space!
 
@@ -6617,7 +6665,11 @@ copy_thru_barrier() {
   source="${1}"
   dest="${2}"
   source_basename="$(basename -- "${source}")"
-  dest_realpath="$(root_cmd_loglevel="echo" dry_run_skip_commands=0 root_cmd realpath -- "${dest}")"
+  ## '--canonicalize-missing': the destination need not exist yet (e.g. under
+  ## '--dry-run' the log dir's 'mkdir' was skipped). Resolve the path anyway
+  ## instead of aborting; a genuinely missing dir in a real run still fails loud
+  ## at the 'tee' below.
+  dest_realpath="$(root_cmd_loglevel="echo" dry_run_skip_commands=0 root_cmd realpath --canonicalize-missing -- "${dest}")"
   if test_file -d "${dest_realpath}"; then
     dest_file="${dest_realpath}/${source_basename}"
   else
