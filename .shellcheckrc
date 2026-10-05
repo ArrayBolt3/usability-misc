@@ -1,0 +1,24 @@
+# shellcheck configuration for the usability-misc repository.
+#
+# Scoped to this repo so its own CI and the standalone-build shellcheck
+# (build-dist-installer-cli runs shellcheck on the generated
+# dist-installer-cli-standalone) apply the same disables as the
+# derivative-maker superproject, instead of relying on a .shellcheckrc that
+# only exists one tree up. Matches the superproject policy.
+#
+# Disabled warnings that are noise without bug-finding value here:
+#
+# SC2154 - referenced-but-not-assigned: scripts source helper-scripts that
+# export many vars at runtime; shellcheck cannot follow those reliably.
+#
+# SC2034 - assigned-but-unused: "config flag" vars are read by sourced child
+# scripts across file boundaries shellcheck cannot see.
+#
+# SC1090 - cannot follow non-constant source (paths from $HELPER_SCRIPTS_PATH).
+#
+# SC1091 - not following: file not included (same cross-file source reason;
+# the standalone keeps a runtime 'source check_runtime.bsh' that is not inlined).
+disable=SC2154
+disable=SC2034
+disable=SC1090
+disable=SC1091

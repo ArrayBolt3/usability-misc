@@ -14,7 +14,7 @@ declare version me start_time dialog_title license adrelanos_signify \
   non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
-  url_version_domain run_background background_pid  \
+  url_version_domain run_background background_pid dic_lock_holder_pid \
   debian_derivative_detected ubuntu_derivative_detected \
   kali_derivative_detected fedora_derivative_detected \
   virtualbox_linux_user_group qubes_template_detected \
@@ -86,8 +86,17 @@ declare version me start_time dialog_title license adrelanos_signify \
 ## Other links to raw versins you can easily infer. For example:
 ## https://raw.githubusercontent.com/Kicksecure/helper-scripts/refs/heads/master/usr/libexec/helper-scripts/wc-test.sh
 
+## Source check_runtime.bsh on its OWN leading 'source' line so the standalone
+## generator (build-dist-installer-cli) INLINES it -- an 'if ! source' guard is not
+## inlinable and would leave the self-contained standalone still depending on
+## helper-scripts at runtime. The missing-file guard moves to a post-source check of
+## was_executed (defined by check_runtime.bsh).
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/check_runtime.bsh
-source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh
+source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/check_runtime.bsh 2>/dev/null || true
+if ! declare -F was_executed >/dev/null; then
+  printf '%s\n' "$0: ERROR: cannot source check_runtime.bsh!" >&2
+  exit 1
+fi
 
 if was_executed "${BASH_SOURCE[0]}"; then
   ## Script was executed.
@@ -97,9 +106,23 @@ if was_executed "${BASH_SOURCE[0]}"; then
   set -o pipefail
   shopt -s inherit_errexit
   shopt -s shift_verbose
+  ## Deterministic C locale: external command output is grepped throughout and
+  ## range-based input validation (is_whole_number and friends) matches ASCII only
+  ## under C -- a UTF-8 locale can make '[0-9]'/'[A-Za-z]' match unexpectedly.
+  ## vboxmanage keeps its own 'LC_ALL=C.UTF-8' override where UTF-8 is needed.
+  export LC_ALL=C
   ## Skip 'strings.bsh' unit tests.
   SKIP_UNIT_TESTS=true
 fi
+
+## Concurrency guard: at most one dist-installer-cli run per user at a time, to stop
+## concurrent runs colliding on the shared download directory and the system-wide apt
+## / modprobe / repository setup. The lock is acquired in run_installer and held by a
+## dedicated holder subprocess (see acquire_concurrency_lock) until this process
+## exits, when end_exit releases it. The holder pattern is required because bash
+## cannot make the lock fd close-on-exec: a fd kept here would leak into children that
+## outlive us (the logging 'tee', the detached VirtualBox GUI, and VBoxSVC which
+## vboxmanage daemonizes) and keep the lock held after we exit, breaking the next run.
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
 source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/has.bsh
@@ -443,10 +466,88 @@ source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/parse_opt.sh
 source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/log_run_die.sh
 
 
+## Acquire the per-user concurrency guard. Called from run_installer AFTER logging is
+## set up; held until the installer process exits (released in end_exit). Scope is
+## per-user: the lock dir is the caller's runtime dir, or the per-user cache dir when
+## there is no logind session (headless / container / 'sudo -u'); both are owned by
+## the user and not world-writable, which is the anti-TOCTOU property (a shared
+## world-writable dir like /tmp is never used).
+##
+## bash cannot mark a file descriptor close-on-exec, and an inherited flock fd keeps
+## the lock held for as long as ANY copy of it is open. The installer spawns children
+## that outlive it -- the logging 'tee', and above all VBoxSVC, which vboxmanage
+## daemonizes -- so a lock fd kept in this process would leak into them and pin the
+## lock after we exit, breaking back-to-back runs. Therefore we hand the held lock to
+## a holder subshell and CLOSE our own copy: no descendant we later spawn can inherit
+## it. The holder keeps the lock open ONLY via its stdin ('<&"${lock_fd}"'), closes the
+## auto-fd so it is not double-held, writes nowhere ('>/dev/null 2>&1', so it never
+## pins a caller's pipe), runs 'sleep' with stdin closed (the lock fd is not passed to
+## it), and polls until THIS process ('${$}', unchanged in the subshell) is gone, then
+## exits and frees the lock. Inside the subshell it must undo what it inherited:
+##  - clear our ERR/EXIT trap (and '|| true' the 'sleep'), else a 'sleep' killed
+##    mid-loop would, under our inherited errexit/ERR trap, run our end_exit (deleting
+##    temp_folder, freeing the lock) from inside the holder;
+##  - IGNORE the signals we trap (HUP/INT/QUIT/TERM/ABRT/ALRM), else a terminal-close
+##    or process-group signal would kill the holder and free the lock while we are
+##    still in our own exit trap. It outlives those and frees the lock only once we are
+##    truly gone; release_concurrency_lock SIGKILLs it (it ignores softer signals).
+## One case the kill -0 poll cannot see: a SIGKILLed-and-never-reaped installer (kill -0
+## succeeds on a zombie) holds the lock until it is reaped -- out of scope, a normal
+## interactive/scripted run is reaped.
+acquire_concurrency_lock() {
+  local lock_dir lock_file lock_fd
+  lock_dir="${XDG_RUNTIME_DIR:-/run/user/$(id --user)}"
+  if [ ! -d "${lock_dir}" ] || [ -L "${lock_dir}" ] || [ ! -O "${lock_dir}" ]; then
+    lock_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}"
+    mkdir --parents -- "${lock_dir}" 2>/dev/null || true
+  fi
+  if [ ! -d "${lock_dir}" ] || [ -L "${lock_dir}" ] || [ ! -O "${lock_dir}" ]; then
+    die 1 "${underline}Concurrency lock:${nounderline} no usable per-user lock directory ('${lock_dir}' must be a directory you own and not a symlink)."
+  fi
+  lock_file="${lock_dir}/dist-installer-cli.lock"
+  exec {lock_fd}>"${lock_file}" || \
+    die 1 "${underline}Concurrency lock:${nounderline} cannot open lock file '${lock_file}'."
+  if ! flock --exclusive --nonblock "${lock_fd}"; then
+    die 1 "${underline}Concurrency lock:${nounderline} another '${me}' run is already in progress (lock '${lock_file}' is held). Wait for it to finish, then retry."
+  fi
+  (
+    trap - ERR EXIT
+    trap '' HUP INT QUIT TERM ABRT ALRM
+    while kill -0 -- "${$}" 2>/dev/null; do
+      ## '|| true' so a killed 'sleep' (non-zero) does not trip errexit and exit the
+      ## holder (freeing the lock); the ERR/EXIT trap is already cleared above.
+      sleep 1 <&- || true
+    done
+  ) <&"${lock_fd}" {lock_fd}>&- >/dev/null 2>&1 &
+  dic_lock_holder_pid="${!}"
+  exec {lock_fd}>&-
+}
+
+## Release the concurrency lock by SIGKILLing the holder, then WAIT for it. The holder
+## ignores softer signals by design, so KILL is required; its death closes the lock fd
+## and frees the flock, and the wait makes release SYNCHRONOUS so an immediate re-run
+## cannot race a not-yet-dead holder and see the lock still held. The holder terminates
+## at once (its foreground 'sleep' child is orphaned but holds no lock fd), so the wait
+## returns promptly, including when reached through the end_exit trap. Idempotent.
+release_concurrency_lock() {
+  if [ -z "${dic_lock_holder_pid:-}" ]; then
+    return 0
+  fi
+  kill -s KILL -- "${dic_lock_holder_pid}" 2>/dev/null || true
+  wait "${dic_lock_holder_pid}" 2>/dev/null || true
+  dic_lock_holder_pid=""
+}
+
 ## Wrapper to end the exit trap.
 end_exit() {
   ## Reset traps.
   trap - ERR EXIT HUP INT QUIT ABRT ALRM TERM
+
+  ## Release the concurrency lock (kill the holder subprocess). The holder would also
+  ## exit on its own once this process is gone; this frees the lock promptly on a
+  ## normal/clean exit instead of waiting for the holder's death-detection poll.
+  release_concurrency_lock
+
   ## Kill tail PID.
   if [ -n "${tail_pid:-}" ]; then
     ## Sleep less than a second so the file descriptors have enough time to
@@ -1771,7 +1872,7 @@ options kvm enable_virt_at_load=0" \
   if kernel_module_loaded_check "kvm"; then
     kvm_kernel_module_found='true'
     log info "Kernel modules configuration: KVM main module active: 'kvm'."
-    if [ "$kvm_variant" = "unknown" ]; then
+    if [ "${kvm_variant}" = "unknown" ]; then
       ## KVM hot unload will almost certainly fail if we can't detect the KVM
       ## variant, as the core KVM module requires a helper module for the
       ## specific CPU architecture. Warn, but try to unload anyway.
@@ -1780,7 +1881,7 @@ options kvm enable_virt_at_load=0" \
     fi
   fi
 
-  if ! [ "$kvm_kernel_module_found" = 'true' ]; then
+  if ! [ "${kvm_kernel_module_found}" = 'true' ]; then
     log notice "Kernel modules configuration: no KVM kernel modules loaded (OK)."
     return 0
   fi
@@ -4093,6 +4194,10 @@ main() {
   vm_delete_maybe
   check_vm_exists_general "(check before import)"
   import_guest
+  ## The lock is held through boot and released in end_exit when the installer exits.
+  ## The detached VirtualBox GUI started by check_guest_boot does NOT inherit the lock
+  ## fd (acquire_concurrency_lock closed our copy), so holding it costs the GUI nothing
+  ## while still serializing a concurrent run's VM delete/import against this boot.
   check_guest_boot
   ########################################
   ## END VERIFICATION, IMPORT AND START ##
@@ -4207,6 +4312,8 @@ set_default() {
   url_version_domain=""
   run_background=""
   background_pid=""
+  ## fd holding the concurrency lock (empty = not held); see acquire/release.
+  dic_lock_holder_pid=""
   debian_derivative_detected=""
   ubuntu_derivative_detected=""
   kali_derivative_detected=""
@@ -4727,6 +4834,9 @@ run_installer() {
   parse_opt "${@}"
   ## Logging mechanism.
   log_term_and_file
+  ## Concurrency guard: acquire before any shared/privileged work. Dry-run is NOT
+  ## exempt -- it still touches the shared download flag -- so it takes the lock too.
+  acquire_concurrency_lock
   welcome
   test_run_as_target_user
 
