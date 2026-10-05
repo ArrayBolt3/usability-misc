@@ -479,12 +479,21 @@ source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/log_run_die.sh
 ## daemonizes -- so a lock fd kept in this process would leak into them and pin the
 ## lock after we exit, breaking back-to-back runs. Therefore we hand the held lock to
 ## a holder subshell and CLOSE our own copy: no descendant we later spawn can inherit
-## it. The holder keeps the lock open ONLY via its stdin ('<&"${lock_fd}"'); it closes
-## the auto-fd ('{lock_fd}>&-') so it is not double-held, and polls until THIS process
-## dies (any exit, including a SIGKILL that bypasses traps), then exits and frees the
-## lock. Its 'sleep' runs with stdin closed ('<&-') so the lock fd is not passed on;
-## killing the holder (release_concurrency_lock) closes its stdin and frees the lock
-## at once, with no child keeping an inherited copy.
+## it. The holder keeps the lock open ONLY via its stdin ('<&"${lock_fd}"'), closes the
+## auto-fd so it is not double-held, writes nowhere ('>/dev/null 2>&1', so it never
+## pins a caller's pipe), runs 'sleep' with stdin closed (the lock fd is not passed to
+## it), and polls until THIS process ('${$}', unchanged in the subshell) is gone, then
+## exits and frees the lock. Inside the subshell it must undo what it inherited:
+##  - clear our ERR/EXIT trap (and '|| true' the 'sleep'), else a 'sleep' killed
+##    mid-loop would, under our inherited errexit/ERR trap, run our end_exit (deleting
+##    temp_folder, freeing the lock) from inside the holder;
+##  - IGNORE the signals we trap (HUP/INT/QUIT/TERM/ABRT/ALRM), else a terminal-close
+##    or process-group signal would kill the holder and free the lock while we are
+##    still in our own exit trap. It outlives those and frees the lock only once we are
+##    truly gone; release_concurrency_lock SIGKILLs it (it ignores softer signals).
+## One case the kill -0 poll cannot see: a SIGKILLed-and-never-reaped installer (kill -0
+## succeeds on a zombie) holds the lock until it is reaped -- out of scope, a normal
+## interactive/scripted run is reaped.
 acquire_concurrency_lock() {
   local lock_dir lock_file lock_fd
   lock_dir="${XDG_RUNTIME_DIR:-/run/user/$(id --user)}"
@@ -501,21 +510,31 @@ acquire_concurrency_lock() {
   if ! flock --exclusive --nonblock "${lock_fd}"; then
     die 1 "${underline}Concurrency lock:${nounderline} another '${me}' run is already in progress (lock '${lock_file}' is held). Wait for it to finish, then retry."
   fi
-  { while kill -0 -- "${$}" 2>/dev/null; do sleep 1 <&-; done; } \
-    <&"${lock_fd}" {lock_fd}>&- &
+  (
+    trap - ERR EXIT
+    trap '' HUP INT QUIT TERM ABRT ALRM
+    while kill -0 -- "${$}" 2>/dev/null; do
+      ## '|| true' so a killed 'sleep' (non-zero) does not trip errexit and exit the
+      ## holder (freeing the lock); the ERR/EXIT trap is already cleared above.
+      sleep 1 <&- || true
+    done
+  ) <&"${lock_fd}" {lock_fd}>&- >/dev/null 2>&1 &
   dic_lock_holder_pid="${!}"
   exec {lock_fd}>&-
 }
 
-## Release the concurrency lock by killing the holder: its death closes the lock fd and
-## frees the flock at once. Idempotent. Do NOT 'wait' for the holder -- reaping it is
-## unnecessary (the freed lock is the point), and a 'wait' reached through the end_exit
-## trap can block; the holder becomes a short-lived harmless orphan instead.
+## Release the concurrency lock by SIGKILLing the holder, then WAIT for it. The holder
+## ignores softer signals by design, so KILL is required; its death closes the lock fd
+## and frees the flock, and the wait makes release SYNCHRONOUS so an immediate re-run
+## cannot race a not-yet-dead holder and see the lock still held. The holder terminates
+## at once (its foreground 'sleep' child is orphaned but holds no lock fd), so the wait
+## returns promptly, including when reached through the end_exit trap. Idempotent.
 release_concurrency_lock() {
   if [ -z "${dic_lock_holder_pid:-}" ]; then
     return 0
   fi
-  kill -- "${dic_lock_holder_pid}" 2>/dev/null || true
+  kill -s KILL -- "${dic_lock_holder_pid}" 2>/dev/null || true
+  wait "${dic_lock_holder_pid}" 2>/dev/null || true
   dic_lock_holder_pid=""
 }
 
