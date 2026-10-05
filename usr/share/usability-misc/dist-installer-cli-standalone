@@ -21,7 +21,7 @@ declare version me start_time dialog_title license adrelanos_signify \
   non_interactive dev noupdate noupgrade getversion getopt ci no_import \
   no_boot redownload import_only destroy_existing_guest testers \
   mirror virtualbox_only target_user last_exit guest_pretty xtrace sucmd \
-  url_version_domain run_background background_pid dic_lock_fd \
+  url_version_domain run_background background_pid dic_lock_holder_pid \
   debian_derivative_detected ubuntu_derivative_detected \
   kali_derivative_detected fedora_derivative_detected \
   virtualbox_linux_user_group qubes_template_detected \
@@ -167,12 +167,14 @@ if was_executed "${BASH_SOURCE[0]}"; then
   SKIP_UNIT_TESTS=true
 fi
 
-## Concurrency guard: at most one dist-installer-cli run per user at a time, to
-## stop concurrent runs colliding on the shared download directory and the
-## system-wide apt / modprobe / repository setup. NOT a top-of-file self-lock: the
-## lock is acquired in run_installer AFTER logging is set up and released before
-## the guest boots (acquire_concurrency_lock / release_concurrency_lock), so no
-## logging 'tee' or backgrounded VirtualBox GUI inherits (and pins) the lock fd.
+## Concurrency guard: at most one dist-installer-cli run per user at a time, to stop
+## concurrent runs colliding on the shared download directory and the system-wide apt
+## / modprobe / repository setup. The lock is acquired in run_installer and held by a
+## dedicated holder subprocess (see acquire_concurrency_lock) until this process
+## exits, when end_exit releases it. The holder pattern is required because bash
+## cannot make the lock fd close-on-exec: a fd kept here would leak into children that
+## outlive us (the logging 'tee', the detached VirtualBox GUI, and VBoxSVC which
+## vboxmanage daemonizes) and keep the lock held after we exit, breaking the next run.
 
 # shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/has.bsh
 ##### BEGIN pasted by build-dist-installer-cli from file /usr/libexec/helper-scripts/has.bsh
@@ -2668,21 +2670,27 @@ range_arg(){
 ##### SKIP duplicate source import from file /usr/libexec/helper-scripts/log_run_die.sh
 
 
-## Acquire the per-user concurrency guard. Called from run_installer AFTER logging
-## is set up -- so the logging 'tee' children never inherit the lock fd -- and
-## released (release_concurrency_lock) before the guest boots and in end_exit, so
-## no logging child or backgrounded VirtualBox GUI keeps the lock held. The lock is
-## held on a bash auto-assigned fd for this process; a second concurrent run fails
-## fast. Scope is per-user: the lock dir is the caller's runtime dir, or the
-## per-user cache dir when there is no logind session (headless / container /
-## 'sudo -u'); both are owned by the user and not world-writable, which is the
-## anti-TOCTOU property (a shared world-writable dir like /tmp is never used).
+## Acquire the per-user concurrency guard. Called from run_installer AFTER logging is
+## set up; held until the installer process exits (released in end_exit). Scope is
+## per-user: the lock dir is the caller's runtime dir, or the per-user cache dir when
+## there is no logind session (headless / container / 'sudo -u'); both are owned by
+## the user and not world-writable, which is the anti-TOCTOU property (a shared
+## world-writable dir like /tmp is never used).
+##
+## bash cannot mark a file descriptor close-on-exec, and an inherited flock fd keeps
+## the lock held for as long as ANY copy of it is open. The installer spawns children
+## that outlive it -- the logging 'tee', and above all VBoxSVC, which vboxmanage
+## daemonizes -- so a lock fd kept in this process would leak into them and pin the
+## lock after we exit, breaking back-to-back runs. Therefore we hand the held lock to
+## a holder subshell and CLOSE our own copy: no descendant we later spawn can inherit
+## it. The holder keeps the lock open ONLY via its stdin ('<&"${lock_fd}"'); it closes
+## the auto-fd ('{lock_fd}>&-') so it is not double-held, and polls until THIS process
+## dies (any exit, including a SIGKILL that bypasses traps), then exits and frees the
+## lock. Its 'sleep' runs with stdin closed ('<&-') so the lock fd is not passed on;
+## killing the holder (release_concurrency_lock) closes its stdin and frees the lock
+## at once, with no child keeping an inherited copy.
 acquire_concurrency_lock() {
-  local lock_dir lock_file
-  ## Dry-run mutates nothing, so it neither takes nor waits on the lock.
-  if [ "${dry_run_skip_commands}" = "1" ]; then
-    return 0
-  fi
+  local lock_dir lock_file lock_fd
   lock_dir="${XDG_RUNTIME_DIR:-/run/user/$(id --user)}"
   if [ ! -d "${lock_dir}" ] || [ -L "${lock_dir}" ] || [ ! -O "${lock_dir}" ]; then
     lock_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}"
@@ -2692,20 +2700,27 @@ acquire_concurrency_lock() {
     die 1 "${underline}Concurrency lock:${nounderline} no usable per-user lock directory ('${lock_dir}' must be a directory you own and not a symlink)."
   fi
   lock_file="${lock_dir}/dist-installer-cli.lock"
-  exec {dic_lock_fd}>"${lock_file}" || \
+  exec {lock_fd}>"${lock_file}" || \
     die 1 "${underline}Concurrency lock:${nounderline} cannot open lock file '${lock_file}'."
-  if ! flock --exclusive --nonblock "${dic_lock_fd}"; then
+  if ! flock --exclusive --nonblock "${lock_fd}"; then
     die 1 "${underline}Concurrency lock:${nounderline} another '${me}' run is already in progress (lock '${lock_file}' is held). Wait for it to finish, then retry."
   fi
+  { while kill -0 -- "${$}" 2>/dev/null; do sleep 1 <&-; done; } \
+    <&"${lock_fd}" {lock_fd}>&- &
+  dic_lock_holder_pid="${!}"
+  exec {lock_fd}>&-
 }
 
-## Release the concurrency lock by closing its fd (frees the flock). Idempotent.
+## Release the concurrency lock by killing the holder: its death closes the lock fd and
+## frees the flock at once. Idempotent. Do NOT 'wait' for the holder -- reaping it is
+## unnecessary (the freed lock is the point), and a 'wait' reached through the end_exit
+## trap can block; the holder becomes a short-lived harmless orphan instead.
 release_concurrency_lock() {
-  if [ -z "${dic_lock_fd:-}" ]; then
+  if [ -z "${dic_lock_holder_pid:-}" ]; then
     return 0
   fi
-  exec {dic_lock_fd}>&- 2>/dev/null || true
-  dic_lock_fd=""
+  kill -- "${dic_lock_holder_pid}" 2>/dev/null || true
+  dic_lock_holder_pid=""
 }
 
 ## Wrapper to end the exit trap.
@@ -2713,9 +2728,9 @@ end_exit() {
   ## Reset traps.
   trap - ERR EXIT HUP INT QUIT ABRT ALRM TERM
 
-  ## Release the concurrency lock (close its fd) as a safety net, in case we exit
-  ## before the explicit release in main(). Closing the held fd frees the lock when
-  ## this process exits.
+  ## Release the concurrency lock (kill the holder subprocess). The holder would also
+  ## exit on its own once this process is gone; this frees the lock promptly on a
+  ## normal/clean exit instead of waiting for the holder's death-detection poll.
   release_concurrency_lock
 
   ## Kill tail PID.
@@ -6364,11 +6379,10 @@ main() {
   vm_delete_maybe
   check_vm_exists_general "(check before import)"
   import_guest
-  ## Release the concurrency lock before booting: the shared/privileged work
-  ## (download, apt/modprobe, import) is done, and a detached VirtualBox GUI started
-  ## by check_guest_boot would otherwise inherit the lock fd and pin it for the VM's
-  ## lifetime.
-  release_concurrency_lock
+  ## The lock is held through boot and released in end_exit when the installer exits.
+  ## The detached VirtualBox GUI started by check_guest_boot does NOT inherit the lock
+  ## fd (acquire_concurrency_lock closed our copy), so holding it costs the GUI nothing
+  ## while still serializing a concurrent run's VM delete/import against this boot.
   check_guest_boot
   ########################################
   ## END VERIFICATION, IMPORT AND START ##
@@ -6484,7 +6498,7 @@ set_default() {
   run_background=""
   background_pid=""
   ## fd holding the concurrency lock (empty = not held); see acquire/release.
-  dic_lock_fd=""
+  dic_lock_holder_pid=""
   debian_derivative_detected=""
   ubuntu_derivative_detected=""
   kali_derivative_detected=""
@@ -7005,8 +7019,8 @@ run_installer() {
   parse_opt "${@}"
   ## Logging mechanism.
   log_term_and_file
-  ## Concurrency guard: acquire AFTER logging is set up (so the logging 'tee'
-  ## children never inherit the lock fd), before any shared/privileged work.
+  ## Concurrency guard: acquire before any shared/privileged work. Dry-run is NOT
+  ## exempt -- it still touches the shared download flag -- so it takes the lock too.
   acquire_concurrency_lock
   welcome
   test_run_as_target_user
