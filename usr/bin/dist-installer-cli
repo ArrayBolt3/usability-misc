@@ -4309,7 +4309,10 @@ File name:
 set_default() {
   ## Options
   user_home_dir="${HOME}"
-  directory_prefix="${HOME}/dist-installer-cli-download"
+  ## Empty sentinel: no explicit '--directory-prefix' given yet. The real
+  ## default is computed in 'parse_opt' once the target account (and thus
+  ## 'user_home_dir') is known.
+  directory_prefix=""
   guest=whonix
   hypervisor=virtualbox
   interface=lxqt
@@ -4668,12 +4671,20 @@ parse_opt() {
       else
         log info "Account check result: '--user=user' option in use: 'Yes' - Therefore using target_user '${target_user}'."
       fi
-      directory_prefix="${user_home_dir}/dist-installer-cli-download"
     else
       log info "Running under account 'sysmaint': 'No'"
     fi
   else
     log info "Account 'sysmaint' exists: 'No'"
+  fi
+
+  ## Default the download dir to the TARGET user's home. 'user_home_dir' is the
+  ## invoker's HOME, the '--user' target's home (set_target_user_account), or
+  ## account 'user' under sysmaint. Download and import run AS the target user,
+  ## so the prefix must be writable by that user. An explicit
+  ## '--directory-prefix' (non-empty here) always wins.
+  if [ -z "${directory_prefix}" ]; then
+    directory_prefix="${user_home_dir}/dist-installer-cli-download"
   fi
 
   if [ -n "${directory_prefix}" ]; then
