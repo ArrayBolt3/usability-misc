@@ -72,6 +72,14 @@ jobs:
             - name: Normal user with sudo privileges
               run: ./ci/normal-user-with-sudo.sh
 
+            ## Regression: installing under a DIFFERENT account must stage the
+            ## download in the TARGET user's home, not the invoker's. Runs before
+            ## the default-install steps so the invoker home is still pristine.
+            - name: Create install target user
+              run: ./ci/create-install-target-user.sh
+            - name: Install under a different account resolves the target home
+              run: ./ci/dist-installer-user-directory-prefix.sh
+
             - name: Run default dist-installer-cli - Clearnet
               run: sudo -u user -- usr/share/usability-misc/dist-installer-cli-standalone --non-interactive --log-level=debug --no-boot --dev --ci
             - name: Run default dist-installer-cli - Onion
