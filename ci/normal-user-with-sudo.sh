@@ -14,6 +14,7 @@ set -o pipefail
 set -o errtrace
 shopt -s inherit_errexit
 shopt -s shift_verbose
+export LC_ALL=C
 
 if test -f /etc/debian_version; then
    ## Debian trixie needs "--comment"; older Debian needs "--gecos".
@@ -27,3 +28,13 @@ elif test -f /etc/fedora-release; then
 else
    exit 1
 fi
+
+## The installer takes a per-user concurrency lock (helper-scripts lockfile.sh)
+## that needs a runtime dir. A CI container has no logind session to create
+## /run/user/<uid>, and 'sudo -u user' does not pass XDG_RUNTIME_DIR, so the
+## installer falls back to /run/user/${EUID} -- which must exist and be owned by
+## 'user'. Create it here (lockfile.sh documents that a pre-login caller must).
+user_uid="$(id --user user)"
+mkdir --parents -- "/run/user/${user_uid}"
+chown user -- "/run/user/${user_uid}"
+chmod 0700 -- "/run/user/${user_uid}"
