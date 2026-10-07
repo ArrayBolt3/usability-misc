@@ -20,8 +20,7 @@ shopt -s shift_verbose
 export LC_ALL=C
 
 if test -f /etc/debian_version; then
-   ## Debian trixie needs "--comment"; older Debian needs "--gecos".
-   adduser --comment "" --disabled-password user2 || adduser --gecos "" --disabled-password user2
+   adduser --comment "" --disabled-password user2
 elif test -f /etc/fedora-release; then
    adduser user2
 else
