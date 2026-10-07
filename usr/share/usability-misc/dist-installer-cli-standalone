@@ -5314,9 +5314,14 @@ get_transfer_cmd() {
 handle_exit_trap() {
   local exit_code=$?
 
+  ## Disarm traps first so a failure inside the handler cannot re-enter it.
   trap - ERR EXIT HUP INT QUIT ABRT ALRM TERM
-  ## style-ok: R-011 -- disabling strict mode aspects is intentional to prevent
-  ## the exit routine from crashing.
+
+  ## Ignore SIGPIPE so the handler is not killed (141) on its own diagnostic
+  ## writes when the reader closed early (piped to 'head', pager quit); it must
+  ## still report the real exit code and run end_exit cleanup (lock, temp dir).
+  trap '' PIPE
+  ## style-ok: R-011 -- a terminal error handler must not abort on its own EPIPE writes.
   set +o errexit
   set +o pipefail
 
